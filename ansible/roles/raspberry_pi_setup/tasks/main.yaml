@@ -23,6 +23,7 @@
       - python3-gpiozero
       - libraspberrypi-bin
       - libserial-dev
+      - libgpiod-dev
     state: present
     update_cache: true
 
