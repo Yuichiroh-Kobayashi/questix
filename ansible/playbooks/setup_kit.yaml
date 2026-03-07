@@ -54,12 +54,10 @@
         msg: "Detected device: {{ pi_model.stdout }}"
 
   roles:
-    - role: ros2_installation
-      vars:
-        ros2_install_dev_tools: "{{ install_dev_tools }}"
-    - role: raspberry_pi_setup
-    - role: hardware_interfaces
-    - role: robotics_workspace
+    - { role: ros2_installation }
+    - { role: raspberry_pi_setup }
+    - { role: hardware_interfaces }
+    - { role: robotics_workspace }
 
   post_tasks:
     - name: Display completion message
