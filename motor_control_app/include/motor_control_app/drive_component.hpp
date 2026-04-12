@@ -73,6 +73,7 @@ private:
   int right_motor_id_;
   int max_motor_rpm_;
   double status_publish_rate_;
+  std::string status_topic_;
 
   // 状態フラグ
   bool motor_initialized_;

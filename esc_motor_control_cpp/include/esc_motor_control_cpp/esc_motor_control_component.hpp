@@ -43,6 +43,8 @@ private:
   double full_speed_value_;
   bool test_mode_;
   std::string joy_topic_;
+  std::string status_topic_;
+  std::string emergency_status_topic_;
   int min_pulse_width_us_;
   int max_pulse_width_us_;
   int neutral_pulse_width_us_;

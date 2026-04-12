@@ -53,7 +53,10 @@ extern "C" {
 #endif
 
 #include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/joy.hpp>
+
 #include <string>
+#include <vector>
 
 namespace uart_joy_driver {
 
@@ -74,17 +77,51 @@ private:
   // Read a complete line from serial buffer
   bool readLine(std::string& line);
 
+  // Convert one ASCII line from the receiver module into a Joy message.
+  bool parseControllerLine(const std::string& line, sensor_msgs::msg::Joy& joy_msg);
+  bool parseHexByte(const std::string& token, uint8_t& value) const;
+  double normalizeAxis(uint8_t value, bool invert) const;
+  void fillDpadAxes(uint8_t dpad_value, sensor_msgs::msg::Joy& joy_msg) const;
+  void applyDropoutFilter(sensor_msgs::msg::Joy& joy_msg);
+  void applySemanticRemap(sensor_msgs::msg::Joy& joy_msg) const;
+  void publishNeutralJoy();
+
   // Parameters
   std::string serial_port_;
   int baud_rate_;
+  double read_poll_rate_;
   double publish_rate_;
+  double deadzone_;
+  double message_timeout_sec_;
+  double hold_axis_threshold_;
+  int axis_release_confirm_frames_;
+  int button_release_confirm_frames_;
+  bool debug_raw_input_;
+  int pan_up_button_index_;
+  int pan_down_button_index_;
+  int fire_input_button_index_;
+  int fire_output_button_index_;
+  int roller_input_button_index_;
+  int roller_output_button_index_;
+  int pan_output_axis_index_;
+  double pan_output_axis_scale_;
 
   // Serial
   int serial_fd_;
   std::string read_buffer_;
 
   // ROS interfaces
+  rclcpp::Publisher<sensor_msgs::msg::Joy>::SharedPtr joy_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::Joy>::SharedPtr joy_raw_pub_;
   rclcpp::TimerBase::SharedPtr read_timer_;
+  rclcpp::Time last_frame_time_;
+  bool have_received_frame_;
+  bool neutral_published_;
+  sensor_msgs::msg::Joy last_valid_joy_msg_;
+  std::vector<float> filtered_axes_;
+  std::vector<int> filtered_buttons_;
+  std::vector<int> axis_release_counts_;
+  std::vector<int> button_release_counts_;
 };
 
 }  // namespace uart_joy_driver

@@ -4,3 +4,5 @@ build
 .vscode
 **/__pycache__/**
 scripts/robot_manager.*
+docs
+rosbag2_*

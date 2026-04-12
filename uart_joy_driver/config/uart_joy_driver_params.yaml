@@ -7,8 +7,48 @@ uart_joy_driver:
     serial_port: "/dev/ttyAMA0"   # RPi built-in UART (GPIO14/15)
     baud_rate: 115200
 
-    # Publishing rate (Hz)
+    # UART polling rate (Hz)
+    read_poll_rate: 50.0
+    # Joy publish rate (Hz)
+    # UARTの受信とは別に、最後の有効なJoyをこの周期で再送します。
     publish_rate: 50.0
 
     # Stick deadzone (0.0-1.0)
     deadzone: 0.05
+
+    # Publish a neutral Joy message if input stops.
+    # UART入力が完全に止まったとき、この秒数でニュートラルに戻します。
+    message_timeout_sec: 0.5
+
+    # Dropout filter for slow UART input / 低速UART向けドロップアウト対策
+    # Release an active stick command only after this many consecutive neutral frames.
+    # 有効なスティック入力を解除するには、連続でこの回数だけニュートラルを確認します。
+    axis_release_confirm_frames: 2
+    # Release a pressed button only after this many consecutive released frames.
+    # 押下中のボタンを解除するには、連続でこの回数だけ離した状態を確認します。
+    button_release_confirm_frames: 2
+    # Treat axes larger than this value as an intentional command.
+    # この値より大きい軸入力を「本当に操作している入力」とみなします。
+    hold_axis_threshold: 0.1
+
+    # Print raw UART frames for debugging when true.
+    debug_raw_input: false
+
+    # UART special button remap / UARTの特別キー割り当て
+    # These input button indices are the raw Switch2 button numbers from UART.
+    # これらの入力ボタン番号は、UARTで届くSwitch2の生ボタン番号です。
+    pan_up_button_index: 4      # L button / Lボタン
+    pan_down_button_index: 6    # ZL button / ZLボタン
+    fire_input_button_index: 5  # R button / Rボタン
+    roller_input_button_index: 7 # ZR button / ZRボタン
+
+    # Semantic output remap / 意味ベースの出力先
+    # Downstream nodes read these Joy positions, so users can change only this file.
+    # 下流ノードはこのJoy位置を読むので、ユーザーはこのファイルだけ変更すればOKです。
+    pan_output_axis_index: 7     # Tilt axis / 仰角軸
+    # Tilt direction sign / 仰角方向の符号
+    # Use 1.0 for normal, -1.0 for inverted.
+    # 通常方向は1.0、上下が逆なら-1.0にします。
+    pan_output_axis_scale: -1.0
+    fire_output_button_index: 0  # Disc fire button / ディスク射出ボタン
+    roller_output_button_index: 3 # Roller spin button / ローラー回転ボタン

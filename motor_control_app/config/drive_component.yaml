@@ -11,7 +11,12 @@ drive_component:
     # モータ設定
     left_motor_id: 4 # 左モータID
     right_motor_id: 5 # 右モータID
+    # 走行モータの上限回転数
+    # 値を下げるとロボット全体の最高速度が下がります。組立直後の安全確認では低めを推奨します。
     max_motor_rpm: 1000 # 最大RPM
 
     # パブリッシュ設定
     status_publish_rate: 10.0 # ステータスパブリッシュ頻度 [Hz]
+    # 左右モータのフィードバック出力先
+    # 左右RPMや現在速度を見たいときは、このトピックを ros2 topic echo してください。
+    status_topic: "/drive_motor_status"
