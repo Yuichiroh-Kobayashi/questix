@@ -24,7 +24,7 @@ DriveComponent::DriveComponent(const rclcpp::NodeOptions& options)
   twist_subscription_ = this->create_subscription<geometry_msgs::msg::Twist>(
       "/target_twist", 1, std::bind(&DriveComponent::twistCallback, this, std::placeholders::_1));
 
-  status_publisher_ = this->create_publisher<std_msgs::msg::String>("motor_status", 1);
+  status_publisher_ = this->create_publisher<std_msgs::msg::String>(status_topic_, 1);
 
   // ステータスパブリッシュタイマー
   auto timer_period = std::chrono::duration<double>(1.0 / status_publish_rate_);
@@ -56,6 +56,7 @@ void DriveComponent::initializeParameters() {
   this->declare_parameter("right_motor_id", 2);
   this->declare_parameter("max_motor_rpm", 1000);
   this->declare_parameter("status_publish_rate", 10.0);
+  this->declare_parameter("status_topic", "/drive_motor_status");
 
   // パラメータを取得
   serial_port_ = this->get_parameter("serial_port").as_string();
@@ -66,6 +67,7 @@ void DriveComponent::initializeParameters() {
   right_motor_id_ = this->get_parameter("right_motor_id").as_int();
   max_motor_rpm_ = this->get_parameter("max_motor_rpm").as_int();
   status_publish_rate_ = this->get_parameter("status_publish_rate").as_double();
+  status_topic_ = this->get_parameter("status_topic").as_string();
 
   RCLCPP_INFO(this->get_logger(), "Parameters initialized:");
   RCLCPP_INFO(this->get_logger(), "  serial_port: %s", serial_port_.c_str());
@@ -76,6 +78,7 @@ void DriveComponent::initializeParameters() {
   RCLCPP_INFO(this->get_logger(), "  right_motor_id: %d", right_motor_id_);
   RCLCPP_INFO(this->get_logger(), "  max_motor_rpm: %d", max_motor_rpm_);
   RCLCPP_INFO(this->get_logger(), "  status_publish_rate: %.1f", status_publish_rate_);
+  RCLCPP_INFO(this->get_logger(), "  status_topic: %s", status_topic_.c_str());
 }
 
 bool DriveComponent::initializeMotorLib() {

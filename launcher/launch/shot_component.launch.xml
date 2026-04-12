@@ -1,7 +1,7 @@
 <launch>
   <!-- Launch Arguments -->
 
-  <arg name="shot_config_file" default="$(find-pkg-share motor_control_app)/config/shot_component.yaml" description="Configuration file path" />
+  <arg name="shot_config_file" default="$(find-pkg-share motor_control_app)/config/shot_config.yaml" description="Configuration file path" />
   <arg name="enable_gpio_ref" default="false" description="Enable GPIO reference system (gpio_reader + joy_gate)" />
   <arg name="use_sim_time" default="false" description="Use simulation time" />
   <!-- joy topic selection based on enable_gpio_ref -->

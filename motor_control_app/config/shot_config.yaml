@@ -4,8 +4,14 @@ shot_component:
     baudrate: 115200
     pan_servo_id: 11
     trigger_servo_id: 10
-    fire_button: 0 # Aボタン（通常0番）
+    # Disc fire button / ディスク射出ボタン
+    # DualShock: X button, UART(Switch2): remapped from R button.
+    # DualShock: ×ボタン, UART(Switch2): Rボタンをここへ変換します。
+    fire_button: 0
     fire_duration_ms: 300 # 射撃持続時間（ミリ秒）
+    # Tilt axis / 仰角軸
+    # DualShock: D-pad up/down, UART(Switch2): remapped from L / ZL buttons.
+    # DualShock: 十字キー上下, UART(Switch2): L / ZLボタンをここへ変換します。
     pan_axis: 7
     fire_angle: 145.0 # 射撃角度（度）
     home_angle: 245.0 # ホーム角度（度）

@@ -4,15 +4,20 @@
 # Movement control parameters
 joy_controller:
   ros__parameters:
-    # Input scaling ratios
-    longitudinal_input_ratio: 0.1 # Forward/backward movement scaling
-    lateral_input_ratio: 0.3 # Left/right movement scaling (for holonomic robots)
-    angular_input_ratio: 0.1 # Rotational movement scaling
+    # Input scaling ratios / 入力スケール
+    # Lower these values to make the robot slower and easier to control.
+    # 数値を小さくすると、ロボットの最高速度を抑えて扱いやすくできます。
+    longitudinal_input_ratio: 0.1 # Forward/backward speed / 前後移動の速度
+    lateral_input_ratio: 0.3 # Left/right speed for holonomic robots / 全方向移動の左右速度
+    # Rotation direction and speed / 旋回の向きと速度
+    # Positive and negative switch the turning direction. Smaller absolute values reduce turning speed.
+    # 符号で旋回方向、絶対値で旋回速度が決まります。逆回転なら符号を反転してください。
+    angular_input_ratio: -0.1
 
     # Controller mapping (button and axis indices)
     linear_x_axis: 1 # Axis for forward/backward (typically left stick Y)
-    linear_y_axis: 3 # Axis for left/right (typically left stick X)
-    angular_z_axis: 0 # Axis for rotation (typically right stick X)
+    linear_y_axis: 0 # Axis for left/right (typically left stick X)
+    angular_z_axis: 3 # Axis for rotation (typically right stick X)
     right_stick_x_axis: 4 # Axis for servo control (typically right stick X)
 
     # Button mapping for servo shot

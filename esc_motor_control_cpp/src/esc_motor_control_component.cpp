@@ -20,6 +20,8 @@ EscMotorControlComponent::EscMotorControlComponent(const rclcpp::NodeOptions& op
   this->declare_parameter<double>("full_speed_value", 1.0);
   this->declare_parameter<bool>("test_mode", false);
   this->declare_parameter<std::string>("joy_topic", "/joy");
+  this->declare_parameter<std::string>("status_topic", "/roller_motor_status");
+  this->declare_parameter<std::string>("emergency_status_topic", "/roller_emergency_status");
   this->declare_parameter<int>("min_pulse_width", 0);         // μs (speed=-1.0)
   this->declare_parameter<int>("max_pulse_width", 2000);      // μs (speed=1.0)
   this->declare_parameter<int>("neutral_pulse_width", 1000);  // μs (ESC arm/idle)
@@ -37,6 +39,8 @@ EscMotorControlComponent::EscMotorControlComponent(const rclcpp::NodeOptions& op
   full_speed_value_ = this->get_parameter("full_speed_value").as_double();
   test_mode_ = this->get_parameter("test_mode").as_bool();
   joy_topic_ = this->get_parameter("joy_topic").as_string();
+  status_topic_ = this->get_parameter("status_topic").as_string();
+  emergency_status_topic_ = this->get_parameter("emergency_status_topic").as_string();
   min_pulse_width_us_ = this->get_parameter("min_pulse_width").as_int();
   max_pulse_width_us_ = this->get_parameter("max_pulse_width").as_int();
   neutral_pulse_width_us_ = this->get_parameter("neutral_pulse_width").as_int();
@@ -56,8 +60,9 @@ EscMotorControlComponent::EscMotorControlComponent(const rclcpp::NodeOptions& op
       std::bind(&EscMotorControlComponent::joy_callback, this, std::placeholders::_1));
 
   // ---- Publishers ----
-  status_pub_ = this->create_publisher<std_msgs::msg::Float32>("motor_status", 10);
-  emergency_pub_ = this->create_publisher<std_msgs::msg::Bool>("emergency_status", qos_transient);
+  status_pub_ = this->create_publisher<std_msgs::msg::Float32>(status_topic_, 10);
+  emergency_pub_ =
+      this->create_publisher<std_msgs::msg::Bool>(emergency_status_topic_, qos_transient);
 
   // ---- Timers ----
   status_timer_ =
@@ -74,6 +79,8 @@ EscMotorControlComponent::EscMotorControlComponent(const rclcpp::NodeOptions& op
   RCLCPP_INFO(this->get_logger(), "ESC Motor Control Node (C++) initialized on pin %d", pwm_pin_);
   RCLCPP_INFO(this->get_logger(), "PWM backend: %s", pwm_ ? pwm_->name().c_str() : "none");
   RCLCPP_INFO(this->get_logger(), "Test Mode: %s", test_mode_ ? "true" : "false");
+  RCLCPP_INFO(this->get_logger(), "Status topic: %s", status_topic_.c_str());
+  RCLCPP_INFO(this->get_logger(), "Emergency topic: %s", emergency_status_topic_.c_str());
   RCLCPP_INFO(this->get_logger(), "Pulse range: %d - %d μs  (neutral %d μs)", min_pulse_width_us_,
               max_pulse_width_us_, neutral_pulse_width_us_);
 
@@ -184,15 +191,14 @@ void EscMotorControlComponent::joy_callback(const sensor_msgs::msg::Joy::SharedP
     full_speed_active_ = true;
     set_motor_speed(full_speed_value_);
 
+  } else if (full_speed_pressed && full_speed_active_) {
+    std::lock_guard<std::mutex> guard(lock_);
+    last_command_time_ = this->now();
+
   } else if (!full_speed_pressed && full_speed_active_) {
     RCLCPP_INFO(this->get_logger(), "Full-speed button RELEASED");
     full_speed_active_ = false;
     set_motor_speed(0.0);
-
-  } else if (full_speed_pressed && full_speed_active_) {
-    // Held – refresh timestamp to prevent safety timeout
-    std::lock_guard<std::mutex> guard(lock_);
-    last_command_time_ = this->now();
   }
 }
 
