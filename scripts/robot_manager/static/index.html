@@ -1,11 +1,13 @@
 <!DOCTYPE html>
 <html lang="ja">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Questix Robot Manager</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
+
 <body>
   <header>
     <h1>Questix Robot Manager</h1>
@@ -46,6 +48,17 @@
     <section class="card">
       <h2>Launch 設定</h2>
       <div class="config-grid">
+        <div class="config-item wide controller-type-row">
+          <label>コントローラー</label>
+          <div class="toggle-row compact">
+            <span class="toggle-label">UART</span>
+            <label class="toggle-switch small">
+              <input type="checkbox" id="controller-type-toggle" data-config="CONTROLLER_TYPE">
+              <span class="slider"></span>
+            </label>
+            <span class="toggle-label">DualShock</span>
+          </div>
+        </div>
         <div class="config-item">
           <label>LiDAR</label>
           <label class="toggle-switch small">
@@ -108,4 +121,5 @@
 
   <script src="/static/app.js"></script>
 </body>
+
 </html>

@@ -59,6 +59,9 @@ class ModeRequest(BaseModel):
     mode: Literal["practice", "competition"]
 
 
+_CONTROLLER_TYPES = {"uart", "dualshock"}
+
+
 class LaunchConfig(BaseModel):
     ROBOT_WS: str | None = None
     ROS_DOMAIN_ID: str | None = None
@@ -67,6 +70,7 @@ class LaunchConfig(BaseModel):
     ENABLE_DRIVE: str | None = None
     ENABLE_GPIO_REF: str | None = None
     ENABLE_RVIZ: str | None = None
+    CONTROLLER_TYPE: str | None = None
 
     @field_validator("ROBOT_WS")
     @classmethod
@@ -88,6 +92,13 @@ class LaunchConfig(BaseModel):
     def validate_bool_flags(cls, v: str | None) -> str | None:
         if v is not None and v not in _BOOL_VALUES:
             raise ValueError("Value must be 'true' or 'false'")
+        return v
+
+    @field_validator("CONTROLLER_TYPE")
+    @classmethod
+    def validate_controller_type(cls, v: str | None) -> str | None:
+        if v is not None and v not in _CONTROLLER_TYPES:
+            raise ValueError("CONTROLLER_TYPE must be 'uart' or 'dualshock'")
         return v
 
 

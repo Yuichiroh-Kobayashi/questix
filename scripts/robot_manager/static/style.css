@@ -192,15 +192,15 @@ main {
   width: 16px;
 }
 
-.toggle-switch input:checked + .slider {
+.toggle-switch input:checked+.slider {
   background: var(--accent);
 }
 
-.toggle-switch input:checked + .slider::before {
+.toggle-switch input:checked+.slider::before {
   transform: translateX(24px);
 }
 
-.toggle-switch.small input:checked + .slider::before {
+.toggle-switch.small input:checked+.slider::before {
   transform: translateX(20px);
 }
 
@@ -297,6 +297,17 @@ main {
   grid-column: 1 / -1;
 }
 
+/* Controller type row — inline toggle with labels */
+.controller-type-row {
+  justify-content: space-between;
+}
+
+.toggle-row.compact {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
 .config-item label {
   font-size: 0.85rem;
 }
@@ -371,19 +382,43 @@ main {
 }
 
 @keyframes toast-in {
-  from { opacity: 0; transform: translateY(20px); }
-  to   { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 @keyframes toast-out {
-  from { opacity: 1; }
-  to   { opacity: 0; transform: translateY(-10px); }
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
 }
 
 /* Responsive */
 @media (max-width: 500px) {
-  header h1 { font-size: 1rem; }
-  .mode-badge { font-size: 1.2rem; }
-  .config-grid { grid-template-columns: 1fr; }
-  .config-item input[type="text"] { width: 160px; }
+  header h1 {
+    font-size: 1rem;
+  }
+
+  .mode-badge {
+    font-size: 1.2rem;
+  }
+
+  .config-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .config-item input[type="text"] {
+    width: 160px;
+  }
 }

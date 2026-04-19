@@ -71,6 +71,11 @@ function updateLaunchConfig(config) {
       input.checked = config[key] === "true";
     }
   }
+  // Controller type toggle: checked = dualshock, unchecked = uart
+  const ctrlToggle = document.getElementById("controller-type-toggle");
+  if (ctrlToggle && config.CONTROLLER_TYPE !== undefined) {
+    ctrlToggle.checked = config.CONTROLLER_TYPE === "dualshock";
+  }
   if (config.ROS_DOMAIN_ID !== undefined) {
     document.getElementById("ros-domain-id").value = config.ROS_DOMAIN_ID;
   }
@@ -149,7 +154,11 @@ function setupEvents() {
   document.getElementById("save-config").addEventListener("click", async () => {
     const config = {};
     for (const input of document.querySelectorAll("[data-config]")) {
-      config[input.dataset.config] = input.checked ? "true" : "false";
+      if (input.dataset.config === "CONTROLLER_TYPE") {
+        config.CONTROLLER_TYPE = input.checked ? "dualshock" : "uart";
+      } else {
+        config[input.dataset.config] = input.checked ? "true" : "false";
+      }
     }
     config.ROS_DOMAIN_ID = document.getElementById("ros-domain-id").value;
     config.ROBOT_WS = document.getElementById("robot-ws").value;

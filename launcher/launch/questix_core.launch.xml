@@ -6,6 +6,7 @@
   <arg name="enable_shot" default="$(env ENABLE_SHOT true)" description="Enable Shot component"/>
   <arg name="enable_drive" default="$(env ENABLE_DRIVE true)" description="Enable drive component"/>
   <arg name="enable_gpio_ref" default="$(env ENABLE_GPIO_REF true)" description="Enable GPIO reference system (gpio_reader + joy_gate)"/>
+  <arg name="controller_type" default="$(env CONTROLLER_TYPE uart)" description="Controller type: dualshock or uart" />
   <arg name="enable_rviz" default="$(env ENABLE_RVIZ false)" description="Enable RViz visualization" />
 
   <group if="$(var enable_shot)">
@@ -17,6 +18,7 @@
   <group if="$(var enable_drive)">
     <include file="$(find-pkg-share questix_launcher)/launch/drive_component.launch.xml">
       <arg name="enable_gpio_ref" value="$(var enable_gpio_ref)"/>
+      <arg name="controller_type" value="$(var controller_type)"/>
     </include>
   </group>
   <group if="$(var enable_lidar)">

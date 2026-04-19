@@ -25,9 +25,8 @@
 #include <cstring>
 #include <sstream>
 #include <string>
-#include <vector>
-
 #include <uart_joy_driver/uart_joy_driver_component.hpp>
+#include <vector>
 
 namespace uart_joy_driver {
 
@@ -95,8 +94,8 @@ UartJoyDriverComponent::UartJoyDriverComponent(const rclcpp::NodeOptions& option
   get_parameter("pan_output_axis_index", pan_output_axis_index_);
   get_parameter("pan_output_axis_scale", pan_output_axis_scale_);
 
-  joy_pub_ = this->create_publisher<sensor_msgs::msg::Joy>("/joy", 10);
-  joy_raw_pub_ = this->create_publisher<sensor_msgs::msg::Joy>("/joy_raw_uart", 10);
+  joy_pub_ = this->create_publisher<sensor_msgs::msg::Joy>("/joy", 1);
+  joy_raw_pub_ = this->create_publisher<sensor_msgs::msg::Joy>("/joy_raw_uart", 1);
   filtered_axes_.assign(kJoyAxisCount, 0.0F);
   filtered_buttons_.assign(kJoyButtonCount, 0);
   axis_release_counts_.assign(kJoyAxisCount, 0);
@@ -108,8 +107,7 @@ UartJoyDriverComponent::UartJoyDriverComponent(const rclcpp::NodeOptions& option
   if (!initializeSerial()) {
     RCLCPP_ERROR(this->get_logger(), "シリアルポートの初期化に失敗しました: %s",
                  serial_port_.c_str());
-    RCLCPP_ERROR(this->get_logger(),
-                 "UARTの配線、受信モジュール、デバイス名を確認してください。");
+    RCLCPP_ERROR(this->get_logger(), "UARTの配線、受信モジュール、デバイス名を確認してください。");
   }
 
   const auto period = std::chrono::duration<double>(1.0 / std::max(1.0, read_poll_rate_));
@@ -118,10 +116,10 @@ UartJoyDriverComponent::UartJoyDriverComponent(const rclcpp::NodeOptions& option
                               std::bind(&UartJoyDriverComponent::readTimerCallback, this));
 
   RCLCPP_INFO(this->get_logger(),
-              "UART Joy Driver initialized: port=%s, baud=%d, read=%.1fHz, publish=%.1fHz, axis_release_frames=%d, button_release_frames=%d, timeout=%.2fs",
+              "UART Joy Driver initialized: port=%s, baud=%d, read=%.1fHz, publish=%.1fHz, "
+              "axis_release_frames=%d, button_release_frames=%d, timeout=%.2fs",
               serial_port_.c_str(), baud_rate_, read_poll_rate_, publish_rate_,
-              axis_release_confirm_frames_, button_release_confirm_frames_,
-              message_timeout_sec_);
+              axis_release_confirm_frames_, button_release_confirm_frames_, message_timeout_sec_);
 }
 
 UartJoyDriverComponent::~UartJoyDriverComponent() { closeSerial(); }
@@ -133,7 +131,7 @@ bool UartJoyDriverComponent::initializeSerial() {
     return false;
   }
 
-  struct termios tty {};
+  struct termios tty{};
   if (tcgetattr(serial_fd_, &tty) != 0) {
     RCLCPP_ERROR(this->get_logger(), "tcgetattr エラー");
     closeSerial();
@@ -220,8 +218,8 @@ void UartJoyDriverComponent::readTimerCallback() {
       }
 
       if (bytes_read < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
-                             "UART read error: %s", std::strerror(errno));
+        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000, "UART read error: %s",
+                             std::strerror(errno));
       }
       break;
     }
@@ -255,7 +253,8 @@ void UartJoyDriverComponent::readTimerCallback() {
 
     if (debug_raw_input_) {
       RCLCPP_INFO(this->get_logger(),
-                  "Received Joy: axes[0]=%.2f axes[1]=%.2f axes[3]=%.2f axes[7]=%.2f buttons[0]=%d buttons[3]=%d",
+                  "Received Joy: axes[0]=%.2f axes[1]=%.2f axes[3]=%.2f axes[7]=%.2f buttons[0]=%d "
+                  "buttons[3]=%d",
                   joy_msg.axes[0], joy_msg.axes[1], joy_msg.axes[3], joy_msg.axes[7],
                   joy_msg.buttons[0], joy_msg.buttons[3]);
     }
