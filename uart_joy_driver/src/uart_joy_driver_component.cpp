@@ -66,14 +66,6 @@ UartJoyDriverComponent::UartJoyDriverComponent(const rclcpp::NodeOptions& option
   declare_parameter("axis_release_confirm_frames", 2);
   declare_parameter("button_release_confirm_frames", 2);
   declare_parameter("debug_raw_input", false);
-  declare_parameter("pan_up_button_index", 4);
-  declare_parameter("pan_down_button_index", 6);
-  declare_parameter("fire_input_button_index", 5);
-  declare_parameter("fire_output_button_index", 0);
-  declare_parameter("roller_input_button_index", 7);
-  declare_parameter("roller_output_button_index", 3);
-  declare_parameter("pan_output_axis_index", 7);
-  declare_parameter("pan_output_axis_scale", -1.0);
 
   get_parameter("serial_port", serial_port_);
   get_parameter("baud_rate", baud_rate_);
@@ -85,14 +77,6 @@ UartJoyDriverComponent::UartJoyDriverComponent(const rclcpp::NodeOptions& option
   get_parameter("axis_release_confirm_frames", axis_release_confirm_frames_);
   get_parameter("button_release_confirm_frames", button_release_confirm_frames_);
   get_parameter("debug_raw_input", debug_raw_input_);
-  get_parameter("pan_up_button_index", pan_up_button_index_);
-  get_parameter("pan_down_button_index", pan_down_button_index_);
-  get_parameter("fire_input_button_index", fire_input_button_index_);
-  get_parameter("fire_output_button_index", fire_output_button_index_);
-  get_parameter("roller_input_button_index", roller_input_button_index_);
-  get_parameter("roller_output_button_index", roller_output_button_index_);
-  get_parameter("pan_output_axis_index", pan_output_axis_index_);
-  get_parameter("pan_output_axis_scale", pan_output_axis_scale_);
 
   joy_pub_ = this->create_publisher<sensor_msgs::msg::Joy>("/joy", 1);
   joy_raw_pub_ = this->create_publisher<sensor_msgs::msg::Joy>("/joy_raw_uart", 1);
@@ -244,7 +228,6 @@ void UartJoyDriverComponent::readTimerCallback() {
 
     auto joy_msg = raw_joy_msg;
     applyDropoutFilter(joy_msg);
-    applySemanticRemap(joy_msg);
     joy_msg.header.stamp = now;
     last_valid_joy_msg_ = joy_msg;
     last_frame_time_ = now;
@@ -340,9 +323,11 @@ bool UartJoyDriverComponent::parseControllerLine(const std::string& line,
   joy_msg.axes.assign(kJoyAxisCount, 0.0F);
   joy_msg.buttons.assign(kJoyButtonCount, 0);
 
-  joy_msg.axes[0] = static_cast<float>(normalizeAxis(lx, false));
+  // Right-hand coordinate frame: stick left = +1, stick right = -1.
+  // 右手座標系: スティック左を +1、右を -1 として出力します。
+  joy_msg.axes[0] = static_cast<float>(normalizeAxis(lx, true));
   joy_msg.axes[1] = static_cast<float>(normalizeAxis(ly, true));
-  joy_msg.axes[3] = static_cast<float>(normalizeAxis(rx, false));
+  joy_msg.axes[3] = static_cast<float>(normalizeAxis(rx, true));
   joy_msg.axes[4] = static_cast<float>(normalizeAxis(ry, true));
   fillDpadAxes(dpad, joy_msg);
 
@@ -414,40 +399,6 @@ void UartJoyDriverComponent::applyDropoutFilter(sensor_msgs::msg::Joy& joy_msg) 
   }
 }
 
-void UartJoyDriverComponent::applySemanticRemap(sensor_msgs::msg::Joy& joy_msg) const {
-  const auto is_pressed = [&joy_msg](int index) {
-    return index >= 0 && index < static_cast<int>(joy_msg.buttons.size()) &&
-           joy_msg.buttons[static_cast<size_t>(index)] == 1;
-  };
-
-  if (pan_output_axis_index_ >= 0 &&
-      pan_output_axis_index_ < static_cast<int>(joy_msg.axes.size()) &&
-      (pan_up_button_index_ >= 0 || pan_down_button_index_ >= 0)) {
-    float pan_axis_value = 0.0F;
-    if (is_pressed(pan_up_button_index_) && !is_pressed(pan_down_button_index_)) {
-      pan_axis_value = 1.0F;
-    } else if (is_pressed(pan_down_button_index_) && !is_pressed(pan_up_button_index_)) {
-      pan_axis_value = -1.0F;
-    }
-    joy_msg.axes[static_cast<size_t>(pan_output_axis_index_)] =
-        static_cast<float>(pan_axis_value * pan_output_axis_scale_);
-  }
-
-  if (fire_output_button_index_ >= 0 &&
-      fire_output_button_index_ < static_cast<int>(joy_msg.buttons.size()) &&
-      fire_input_button_index_ >= 0) {
-    joy_msg.buttons[static_cast<size_t>(fire_output_button_index_)] =
-        is_pressed(fire_input_button_index_) ? 1 : 0;
-  }
-
-  if (roller_output_button_index_ >= 0 &&
-      roller_output_button_index_ < static_cast<int>(joy_msg.buttons.size()) &&
-      roller_input_button_index_ >= 0) {
-    joy_msg.buttons[static_cast<size_t>(roller_output_button_index_)] =
-        is_pressed(roller_input_button_index_) ? 1 : 0;
-  }
-}
-
 bool UartJoyDriverComponent::parseHexByte(const std::string& token, uint8_t& value) const {
   if (token.empty() || token.size() > 2) {
     return false;
@@ -477,6 +428,8 @@ double UartJoyDriverComponent::normalizeAxis(uint8_t value, bool invert) const {
 
 void UartJoyDriverComponent::fillDpadAxes(uint8_t dpad_value,
                                           sensor_msgs::msg::Joy& joy_msg) const {
+  // Right-hand coordinate frame: D-pad left = +1, right = -1.
+  // 右手座標系: 十字キー左を +1、右を -1 として出力します。
   double horizontal = 0.0;
   double vertical = 0.0;
 
@@ -485,28 +438,28 @@ void UartJoyDriverComponent::fillDpadAxes(uint8_t dpad_value,
       vertical = 1.0;
       break;
     case 2:
-      horizontal = 1.0;
+      horizontal = -1.0;
       vertical = 1.0;
       break;
     case 3:
-      horizontal = 1.0;
+      horizontal = -1.0;
       break;
     case 4:
-      horizontal = 1.0;
+      horizontal = -1.0;
       vertical = -1.0;
       break;
     case 5:
       vertical = -1.0;
       break;
     case 6:
-      horizontal = -1.0;
+      horizontal = 1.0;
       vertical = -1.0;
       break;
     case 7:
-      horizontal = -1.0;
+      horizontal = 1.0;
       break;
     case 8:
-      horizontal = -1.0;
+      horizontal = 1.0;
       vertical = 1.0;
       break;
     default:
