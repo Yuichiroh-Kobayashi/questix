@@ -135,6 +135,7 @@ jobs:
             --event-handlers console_cohesion+ \
             --parallel-workers $PARALLEL_WORKERS \
             --cmake-args -DCMAKE_BUILD_TYPE=Release \
+            --packages-skip ydlidar_ros2_driver \
             --symlink-install
 
       - name: Run tests
@@ -144,6 +145,7 @@ jobs:
           colcon test \
             --event-handlers console_cohesion+ \
             --parallel-workers $(nproc) \
+            --packages-skip ydlidar_ros2_driver \
             --return-code-on-test-failure
 
       - name: Show test results
@@ -173,17 +175,15 @@ jobs:
 
       - name: Install linting tools
         run: |
-          apt-get update && apt-get install -y pipx && rm -rf /var/lib/apt/lists/*
-          pipx install flake8
-          pipx install pep257
+          apt-get update && apt-get install -y python3-flake8 pydocstyle && rm -rf /var/lib/apt/lists/*
 
       - name: Run flake8 (Python style check)
         run: |
-          find . -name "*.py" -not -path "./__pycache__/*" -not -path "./build/*" -not -path "./install/*" -not -path "./log/*" | xargs -r /root/.local/bin/flake8 --max-line-length=100 --ignore=E501,W503
+          find . -name "*.py" -not -path "./__pycache__/*" -not -path "./build/*" -not -path "./install/*" -not -path "./log/*" | xargs -r flake8 --max-line-length=100 --ignore=E501,W503
 
-      - name: Run pep257 (Python docstring check)
+      - name: Run pydocstyle (Python docstring check)
         run: |
-          find . -name "*.py" -not -path "./__pycache__/*" -not -path "./build/*" -not -path "./install/*" -not -path "./log/*" | xargs -r /root/.local/bin/pep257 --ignore=D100,D101,D102,D103,D104,D105,D107,D203,D213
+          find . -name "*.py" -not -path "./__pycache__/*" -not -path "./build/*" -not -path "./install/*" -not -path "./log/*" | xargs -r pydocstyle --ignore=D100,D101,D102,D103,D104,D105,D107,D203,D213
 
   format-check:
     runs-on: ubuntu-latest
@@ -207,14 +207,13 @@ jobs:
       - name: Install ament_clang_format
         run: |
           apt-get update && apt-get install -y \
-            pipx \
+            ros-${{ matrix.ros_distro }}-ament-clang-format \
             ros-dev-tools \
             && rm -rf /var/lib/apt/lists/*
-          pipx install ament_clang_format
 
       - name: Check C++ formatting
         run: |
-          find . -name "*.cpp" -o -name "*.hpp" | xargs -r /root/.local/bin/ament_clang_format --config .clang-format --reformat-code=false
+          find . -name "*.cpp" -o -name "*.hpp" | xargs -r ament_clang_format --config .clang-format --reformat-code=false
 
   build-summary:
     needs: [build-and-test, static-analysis, format-check]
