@@ -18,6 +18,10 @@ on:
       - "docker/**"
       - "scripts/**"
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
@@ -29,7 +33,9 @@ jobs:
     strategy:
       matrix:
         ros_distro: [jazzy]
-        architecture: [amd64, arm64]
+        # Temporarily keep CI on native amd64; hosted runners do not provide
+        # reliable arm64 container execution for this workflow.
+        architecture: [amd64]
       fail-fast: false
 
     steps:
@@ -47,7 +53,7 @@ jobs:
         run: |
           apt-get update && apt-get install -y \
             python3-colcon-common-extensions \
-            python3-pip \
+            python3-serial \
             python3-vcstool \
             ccache \
             git \
@@ -100,9 +106,6 @@ jobs:
             apt-get -yqq update
             rosdep install -yqq --from-paths . --ignore-src --rosdistro ${{ matrix.ros_distro }} || true
           fi
-
-      - name: Install Python dependencies
-        run: pip3 install pyserial
 
       - name: Setup colcon mixin
         run: |
@@ -170,16 +173,17 @@ jobs:
 
       - name: Install linting tools
         run: |
-          apt-get update && apt-get install -y python3-pip && rm -rf /var/lib/apt/lists/*
-          pip3 install flake8 pep257
+          apt-get update && apt-get install -y pipx && rm -rf /var/lib/apt/lists/*
+          pipx install flake8
+          pipx install pep257
 
       - name: Run flake8 (Python style check)
         run: |
-          find . -name "*.py" -not -path "./__pycache__/*" -not -path "./build/*" -not -path "./install/*" -not -path "./log/*" | xargs -r flake8 --max-line-length=100 --ignore=E501,W503
+          find . -name "*.py" -not -path "./__pycache__/*" -not -path "./build/*" -not -path "./install/*" -not -path "./log/*" | xargs -r /root/.local/bin/flake8 --max-line-length=100 --ignore=E501,W503
 
       - name: Run pep257 (Python docstring check)
         run: |
-          find . -name "*.py" -not -path "./__pycache__/*" -not -path "./build/*" -not -path "./install/*" -not -path "./log/*" | xargs -r pep257 --ignore=D100,D101,D102,D103,D104,D105,D107,D203,D213
+          find . -name "*.py" -not -path "./__pycache__/*" -not -path "./build/*" -not -path "./install/*" -not -path "./log/*" | xargs -r /root/.local/bin/pep257 --ignore=D100,D101,D102,D103,D104,D105,D107,D203,D213
 
   format-check:
     runs-on: ubuntu-latest
@@ -203,14 +207,14 @@ jobs:
       - name: Install ament_clang_format
         run: |
           apt-get update && apt-get install -y \
-            python3-pip \
+            pipx \
             ros-dev-tools \
             && rm -rf /var/lib/apt/lists/*
-          pip3 install ament_clang_format
+          pipx install ament_clang_format
 
       - name: Check C++ formatting
         run: |
-          find . -name "*.cpp" -o -name "*.hpp" | xargs -r ament_clang_format --config .clang-format --reformat-code=false
+          find . -name "*.cpp" -o -name "*.hpp" | xargs -r /root/.local/bin/ament_clang_format --config .clang-format --reformat-code=false
 
   build-summary:
     needs: [build-and-test, static-analysis, format-check]
