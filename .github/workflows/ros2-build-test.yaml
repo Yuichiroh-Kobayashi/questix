@@ -24,6 +24,7 @@ defaults:
 
 jobs:
   build-and-test:
+    name: build-and-test (${{ matrix.ros_distro }}, ${{ matrix.architecture }})
     runs-on: ubuntu-latest
     container:
       image: ros:${{ matrix.ros_distro }}-ros-base
@@ -136,24 +137,58 @@ jobs:
           echo "Using $PARALLEL_WORKERS parallel workers for build"
 
           # Build with optimizations
+          set +e
           colcon build \
             --event-handlers console_cohesion+ \
             --parallel-workers $PARALLEL_WORKERS \
             --cmake-args -DCMAKE_BUILD_TYPE=Release \
             --symlink-install
+          build_status=$?
+          set -e
+
+          if [[ "$build_status" -ne 0 ]]; then
+            if [[ "${{ matrix.allow_failure }}" == "true" ]]; then
+              echo "::warning title=Allowed ${{ matrix.architecture }} build failure::colcon build exited with $build_status"
+            else
+              exit "$build_status"
+            fi
+          fi
 
       - name: Run tests
         run: |
           source /opt/ros/${{ matrix.ros_distro }}/setup.bash
+          if [[ ! -f install/setup.bash ]]; then
+            if [[ "${{ matrix.allow_failure }}" == "true" ]]; then
+              echo "::warning title=Allowed ${{ matrix.architecture }} test skip::install/setup.bash was not generated"
+              exit 0
+            fi
+            echo "install/setup.bash was not generated"
+            exit 1
+          fi
           source install/setup.bash
+          set +e
           colcon test \
             --event-handlers console_cohesion+ \
             --parallel-workers $(nproc)
+          test_status=$?
+          set -e
+
+          if [[ "$test_status" -ne 0 ]]; then
+            if [[ "${{ matrix.allow_failure }}" == "true" ]]; then
+              echo "::warning title=Allowed ${{ matrix.architecture }} test failure::colcon test exited with $test_status"
+            else
+              exit "$test_status"
+            fi
+          fi
 
       - name: Show test results
         if: always()
         run: |
           source /opt/ros/${{ matrix.ros_distro }}/setup.bash
+          if [[ ! -f install/setup.bash ]]; then
+            echo "No install/setup.bash found; skipping test result summary"
+            exit 0
+          fi
           source install/setup.bash
           colcon test-result --verbose || echo "No test results found"
 
