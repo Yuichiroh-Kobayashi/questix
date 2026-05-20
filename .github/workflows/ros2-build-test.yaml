@@ -119,7 +119,7 @@ jobs:
           path: |
             build
             install
-          key: build-${{ matrix.ros_distro }}-${{ runner.os }}-${{ matrix.architecture }}-${{ hashFiles('**/CMakeLists.txt', '**/*.cmake', '**/package.xml') }}
+          key: build-${{ matrix.ros_distro }}-${{ runner.os }}-${{ matrix.architecture }}-${{ hashFiles('*/CMakeLists.txt', '*/*.cmake', '*/package.xml') }}
           restore-keys: |
             build-${{ matrix.ros_distro }}-${{ runner.os }}-${{ matrix.architecture }}-
 
