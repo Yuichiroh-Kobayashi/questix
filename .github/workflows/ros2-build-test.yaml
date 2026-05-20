@@ -28,7 +28,7 @@ jobs:
       DEBIAN_FRONTEND: noninteractive
     strategy:
       matrix:
-        ros_distro: [humble, jazzy]
+        ros_distro: [jazzy]
         architecture: [amd64, arm64]
       fail-fast: false
 
@@ -63,29 +63,19 @@ jobs:
 
       - name: Setup workspace and dependencies
         run: |
-          # Create workspace structure
-          mkdir -p src
-
-          # Copy ROS2 package directories to workspace
-          for pkg in ddt_motor_control esc_motor_control joy_controller servo_control_ros2; do
-            if [ -d "$pkg" ]; then
-              cp -r "$pkg" src/
-            fi
-          done
-
           # Import additional repositories if dependency.repos exists
           if [ -f dependency.repos ]; then
             # Configure git to use HTTPS instead of SSH for GitHub
             git config --global url."https://github.com/".insteadOf "git@github.com:"
             git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
-            vcs import src < dependency.repos
+            vcs import . < dependency.repos
           fi
 
       - name: Generate rosdep keys
         run: |
           rosdep init || true
           rosdep update
-          colcon list -p --base-paths src > packages.txt
+          colcon list -p > packages.txt
           rosdep keys --from-paths $(cat packages.txt) --rosdistro ${{ matrix.ros_distro }} > rosdep_keys.txt || echo "No rosdep keys found"
 
       - name: Cache rosdep
@@ -106,7 +96,7 @@ jobs:
           else
             echo "Rosdep cache miss. Running rosdep install."
             apt-get -yqq update
-            rosdep install -yqq --from-paths src --ignore-src --rosdistro ${{ matrix.ros_distro }} || true
+            rosdep install -yqq --from-paths $(cat packages.txt) --ignore-src --rosdistro ${{ matrix.ros_distro }} || true
           fi
 
       - name: Install Python dependencies
@@ -166,7 +156,7 @@ jobs:
       DEBIAN_FRONTEND: noninteractive
     strategy:
       matrix:
-        ros_distro: [humble, jazzy]
+        ros_distro: [jazzy]
     steps:
       - name: Suppress git warnings
         run: git config --global --add safe.directory '*'
@@ -197,7 +187,7 @@ jobs:
       DEBIAN_FRONTEND: noninteractive
     strategy:
       matrix:
-        ros_distro: [humble, jazzy]
+        ros_distro: [jazzy]
     if: github.event_name == 'pull_request'
     steps:
       - name: Suppress git warnings
@@ -224,7 +214,7 @@ jobs:
     needs: [build-and-test, static-analysis, format-check]
     runs-on: ubuntu-latest
     container:
-      image: ros:humble-ros-base
+      image: ros:jazzy-ros-base
     env:
       DEBIAN_FRONTEND: noninteractive
     if: always()
