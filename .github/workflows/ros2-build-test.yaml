@@ -57,6 +57,7 @@ jobs:
             python3-vcstool \
             ccache \
             git \
+            libgpiod-dev \
             wget \
             && rm -rf /var/lib/apt/lists/*
 
@@ -179,11 +180,11 @@ jobs:
 
       - name: Run flake8 (Python style check)
         run: |
-          find . -name "*.py" -not -path "./__pycache__/*" -not -path "./build/*" -not -path "./install/*" -not -path "./log/*" | xargs -r flake8 --max-line-length=100 --ignore=E501,W503
+          find . -name "*.py" -not -path "./__pycache__/*" -not -path "./build/*" -not -path "./install/*" -not -path "./log/*" | xargs -r python3 -m flake8 --max-line-length=100 --ignore=E501,W503
 
       - name: Run pydocstyle (Python docstring check)
         run: |
-          find . -name "*.py" -not -path "./__pycache__/*" -not -path "./build/*" -not -path "./install/*" -not -path "./log/*" | xargs -r pydocstyle --ignore=D100,D101,D102,D103,D104,D105,D107,D203,D213
+          find . -name "*.py" -not -path "./__pycache__/*" -not -path "./build/*" -not -path "./install/*" -not -path "./log/*" | xargs -r python3 -m pydocstyle --ignore=D100,D101,D102,D103,D104,D105,D107,D203,D213
 
   format-check:
     runs-on: ubuntu-latest
@@ -213,6 +214,7 @@ jobs:
 
       - name: Check C++ formatting
         run: |
+          source /opt/ros/${{ matrix.ros_distro }}/setup.bash
           find . -name "*.cpp" -o -name "*.hpp" | xargs -r ament_clang_format --config .clang-format --reformat-code=false
 
   build-summary:
