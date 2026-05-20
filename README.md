@@ -101,11 +101,12 @@ questix_core/
 
 ### Variables
 
-Customize builds by setting environment variables:
+The default build target is Ubuntu 24.04 + ROS 2 Jazzy. Normal builds do not require
+setting `ROS2_DISTRO` or `UBUNTU_VERSION`.
 
 ```bash
-# Jazzy / Ubuntu 24.04 is the supported baseline
-make _build ARCHITECTURE=amd64 ROS2_DISTRO=jazzy
+# Advanced: override only the architecture when calling the internal target directly
+make _build ARCHITECTURE=amd64
 ```
 
 ### Ansible Playbooks
@@ -150,8 +151,6 @@ The GitHub Actions workflow automatically:
 ```bash
 # Trigger manual build via GitHub CLI
 gh workflow run build-iso.yml \
-  --field ros2_distro=jazzy \
-  --field ubuntu_version=24.04 \
   --field architecture=arm64
 ```
 
