@@ -68,6 +68,8 @@ jobs:
             # Configure git to use HTTPS instead of SSH for GitHub
             git config --global url."https://github.com/".insteadOf "git@github.com:"
             git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+            # This repository root is the colcon workspace; dependency.repos entries must not
+            # collide with existing package directories.
             vcs import . < dependency.repos
           fi
 
@@ -75,8 +77,8 @@ jobs:
         run: |
           rosdep init || true
           rosdep update
-          colcon list -p > packages.txt
-          rosdep keys --from-paths $(cat packages.txt) --rosdistro ${{ matrix.ros_distro }} > rosdep_keys.txt || echo "No rosdep keys found"
+          # CI starts from a clean checkout, so the repository root safely covers all packages.
+          rosdep keys --from-paths . --rosdistro ${{ matrix.ros_distro }} > rosdep_keys.txt || echo "No rosdep keys found"
 
       - name: Cache rosdep
         id: cache-rosdep
@@ -96,7 +98,7 @@ jobs:
           else
             echo "Rosdep cache miss. Running rosdep install."
             apt-get -yqq update
-            rosdep install -yqq --from-paths $(cat packages.txt) --ignore-src --rosdistro ${{ matrix.ros_distro }} || true
+            rosdep install -yqq --from-paths . --ignore-src --rosdistro ${{ matrix.ros_distro }} || true
           fi
 
       - name: Install Python dependencies

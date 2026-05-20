@@ -9,7 +9,7 @@ This project provides a complete automation pipeline using Ansible and GitHub Ac
 ### 🖥️ Development Environment (AMD64)
 
 - **Target**: Desktop/laptop development machines
-- **OS**: Ubuntu 22.04 LTS with ROS2 Humble
+- **OS**: Ubuntu 24.04 LTS with ROS2 Jazzy
 - **Tools**: Full desktop environment, development tools, ROS2 Desktop
 - **Workspace**: Pre-configured `~/ros2_ws`
 
@@ -39,7 +39,7 @@ This project provides a complete automation pipeline using Ansible and GitHub Ac
    sudo dd if=ros2-robotics-kit-arm64-ubuntu24.04-ros2jazzy.iso of=/dev/sdX bs=4M status=progress
    
    # For PC/Laptop (AMD64) 
-   sudo dd if=ros2-robotics-kit-amd64-ubuntu22.04-ros2humble.iso of=/dev/sdX bs=4M status=progress
+   sudo dd if=ros2-robotics-kit-amd64-ubuntu24.04-ros2jazzy.iso of=/dev/sdX bs=4M status=progress
    ```
 
 3. **Boot and Install**
@@ -104,13 +104,7 @@ questix_core/
 Customize builds by setting environment variables:
 
 ```bash
-# Use different ROS2 distribution
-make build-dev ROS2_DISTRO=iron
-
-# Target different Ubuntu version (override defaults)
-make build-kit UBUNTU_VERSION=22.04  # Force older version for ARM64
-
-# Custom architecture
+# Jazzy / Ubuntu 24.04 is the supported baseline
 make _build ARCHITECTURE=amd64 ROS2_DISTRO=jazzy
 ```
 
@@ -127,9 +121,9 @@ Add packages to the `ros2_additional_packages` variable in playbooks:
 
 ```yaml
 ros2_additional_packages:
-  - ros-humble-navigation2
-  - ros-humble-slam-toolbox
-  - ros-humble-moveit
+  - ros-jazzy-navigation2
+  - ros-jazzy-slam-toolbox
+  - ros-jazzy-moveit
 ```
 
 ## 🐙 GitHub Actions
@@ -156,8 +150,8 @@ The GitHub Actions workflow automatically:
 ```bash
 # Trigger manual build via GitHub CLI
 gh workflow run build-iso.yml \
-  --field ros2_distro=humble \
-  --field ubuntu_version=22.04 \
+  --field ros2_distro=jazzy \
+  --field ubuntu_version=24.04 \
   --field architecture=arm64
 ```
 
@@ -217,10 +211,36 @@ rw  # Navigate to robot workspace
 
 ### Build Environment
 
-- Ubuntu 20.04+ or similar Linux distribution
+- Ubuntu 24.04 with ROS 2 Jazzy
 - 20GB+ free disk space
 - Internet connection for package downloads
 - sudo privileges
+
+### Workspace Build Dependencies
+
+Required for building packages:
+
+- `libgpiod-dev` - headers and libraries used by `gpio_reader`
+
+Required when launching visualization or robot description flows:
+
+- `ros-jazzy-xacro`
+- `ros-jazzy-joint-state-publisher`
+
+### Runtime Source Dependencies
+
+The launcher package expects the following packages to be available in the same colcon
+workspace. They are source/workspace dependencies, not apt packages:
+
+- `ydlidar_ros2_driver`
+- `servo_control_ros2`
+- `esc_motor_control`
+- `ddt_motor_control`
+
+`dependency.repos` currently references `ydlidar_ros2_driver` with `version: humble`.
+For Jazzy operation, confirm that the selected branch or tag is compatible with ROS 2
+Jazzy before using it. A successful `vcs import` only confirms that the repository was
+fetched; it does not guarantee runtime behavior.
 
 ### Runtime (Generated ISOs)
 
