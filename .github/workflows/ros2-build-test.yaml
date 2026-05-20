@@ -32,11 +32,15 @@ jobs:
       DEBIAN_FRONTEND: noninteractive
     strategy:
       matrix:
-        ros_distro: [jazzy]
-        # Temporarily keep CI on native amd64; hosted runners do not provide
-        # reliable arm64 container execution for this workflow.
-        architecture: [amd64]
+        include:
+          - ros_distro: jazzy
+            architecture: amd64
+            allow_failure: false
+          - ros_distro: jazzy
+            architecture: arm64
+            allow_failure: true
       fail-fast: false
+    continue-on-error: ${{ matrix.allow_failure }}
 
     steps:
       - name: Suppress git warnings
@@ -212,80 +216,8 @@ jobs:
       - name: Check C++ formatting
         run: |
           source /opt/ros/${{ matrix.ros_distro }}/setup.bash
-          find . \( -name "*.cpp" -o -name "*.hpp" \) | xargs -r ament_clang_format --config .clang-format
+          git ls-files -z -- '*.cpp' '*.hpp' | xargs -0 -r ament_clang_format --config .clang-format
 
-
-  auto-create-followup-issue:
-    needs: [build-and-test, static-analysis, format-check]
-    runs-on: ubuntu-latest
-    if: >-
-      always() &&
-      github.event_name == 'pull_request' &&
-      (needs.build-and-test.result == 'failure' || needs.static-analysis.result == 'failure' || needs.format-check.result == 'failure')
-    permissions:
-      contents: read
-      issues: write
-      pull-requests: read
-    steps:
-      - name: Create follow-up issue in current repository
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            const pr = context.payload.pull_request;
-            if (!pr) {
-              core.info('No pull request context. Skipping issue creation.');
-              return;
-            }
-
-            const failures = [
-              ['build-and-test', '${{ needs.build-and-test.result }}'],
-              ['static-analysis', '${{ needs.static-analysis.result }}'],
-              ['format-check', '${{ needs.format-check.result }}'],
-            ].filter(([, result]) => result === 'failure');
-
-            if (failures.length === 0) {
-              core.info('No failed jobs to report.');
-              return;
-            }
-
-            const label = 'ci-followup';
-            const search = `repo:${owner}/${repo} is:issue is:open label:${label} in:title PR #${pr.number} CI follow-up`;
-            const existing = await github.rest.search.issuesAndPullRequests({ q: search });
-            if (existing.data.total_count > 0) {
-              core.info('Open follow-up issue already exists.');
-              return;
-            }
-
-            const failedList = failures.map(([name]) => `- ${name}`).join('\n');
-            const title = `PR #${pr.number} CI follow-up: unresolved failures`;
-            const body = [
-              'This issue was generated automatically from a pull request CI run.',
-              '',
-              `- PR: ${pr.html_url}`,
-              `- Head SHA: ${pr.head.sha}`,
-              `- Workflow run: https://github.com/${owner}/${repo}/actions/runs/${context.runId}`,
-              '',
-              '## Failed jobs',
-              failedList,
-              '',
-              '## Next actions',
-              '- Reproduce failure locally with the same ROS distro/container when possible.',
-              '- Implement root-cause fix in code or package configuration (avoid permanent CI bypasses).',
-              '- Re-enable any temporarily relaxed quality gate once fixed.',
-            ].join('\n');
-
-            try {
-              await github.rest.issues.create({ owner, repo, title, body, labels: [label, 'ci'] });
-            } catch (error) {
-              if (error.status === 422) {
-                await github.rest.issues.create({ owner, repo, title, body });
-              } else {
-                throw error;
-              }
-            }
   build-summary:
     needs: [build-and-test, static-analysis, format-check]
     runs-on: ubuntu-latest
