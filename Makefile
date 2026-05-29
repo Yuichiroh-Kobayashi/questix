@@ -13,7 +13,7 @@ UBUNTU_VERSION_AMD64 ?= 24.04
 UBUNTU_VERSION_ARM64 ?= 24.04
 ROS2_DISTRO_AMD64 ?= jazzy
 ROS2_DISTRO_ARM64 ?= jazzy
-ANSIBLE_ROLES_PATH ?= $(CURDIR)/ansible/roles
+export ANSIBLE_ROLES_PATH ?= $(CURDIR)/ansible/roles
 
 help: ## Show this help message
 	@echo "ROS2 Robotics Kit ISO Builder"
@@ -50,10 +50,10 @@ setup-deps: ## Install build dependencies
 test-ansible: ## Test and validate Ansible playbooks
 	@echo "🧪 Testing Ansible playbooks..."
 	yamllint ansible/
-	ANSIBLE_ROLES_PATH=$(ANSIBLE_ROLES_PATH) ansible-lint -c .ansible-lint.yml ansible/playbooks/setup_dev.yaml
-	ANSIBLE_ROLES_PATH=$(ANSIBLE_ROLES_PATH) ansible-lint -c .ansible-lint.yml ansible/playbooks/setup_kit.yaml
-	ANSIBLE_ROLES_PATH=$(ANSIBLE_ROLES_PATH) ansible-playbook --syntax-check ansible/playbooks/setup_dev.yaml
-	ANSIBLE_ROLES_PATH=$(ANSIBLE_ROLES_PATH) ansible-playbook --syntax-check ansible/playbooks/setup_kit.yaml
+	ansible-lint -c .ansible-lint.yml ansible/playbooks/setup_dev.yaml
+	ansible-lint -c .ansible-lint.yml ansible/playbooks/setup_kit.yaml
+	ansible-playbook --syntax-check -i localhost, ansible/playbooks/setup_dev.yaml
+	ansible-playbook --syntax-check -i localhost, ansible/playbooks/setup_kit.yaml
 	@echo "✅ Ansible playbooks validated"
 
 build-dev: test-ansible ## Build development ISO (AMD64)

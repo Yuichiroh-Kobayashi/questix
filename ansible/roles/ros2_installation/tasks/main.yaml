@@ -177,6 +177,7 @@
 
 - name: Update rosdep
   ansible.builtin.command: rosdep update
+  become: false
   changed_when: false
 
 # Clean up temporary files
