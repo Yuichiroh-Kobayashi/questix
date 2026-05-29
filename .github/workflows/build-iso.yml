@@ -2,32 +2,6 @@ name: Build ROS2 Robotics Kit ISO
 
 on:
   workflow_dispatch:
-    inputs:
-      ros2_distro:
-        description: "ROS2 Distribution"
-        required: true
-        default: "jazzy"
-        type: choice
-        options:
-          - humble
-          - iron
-          - jazzy
-      ubuntu_version:
-        description: "Ubuntu Version"
-        required: true
-        default: "24.04"
-        type: choice
-        options:
-          - "22.04"
-          - "24.04"
-      architecture:
-        description: "Target Architecture"
-        required: true
-        default: "arm64"
-        type: choice
-        options:
-          - arm64
-          - amd64
 
 env:
   ISO_NAME: ros2-robotics-kit
@@ -42,8 +16,8 @@ jobs:
       matrix:
         include:
           - architecture: amd64
-            ubuntu_version: "22.04"
-            ros2_distro: humble
+            ubuntu_version: "24.04"
+            ros2_distro: jazzy
           - architecture: arm64
             ubuntu_version: "24.04"
             ros2_distro: jazzy
@@ -134,7 +108,7 @@ jobs:
       - name: Download ISO artifact
         uses: actions/download-artifact@v4
         with:
-          name: ${{ env.ISO_NAME }}-${{ matrix.architecture }}-ubuntu22.04-ros2humble
+          name: ${{ env.ISO_NAME }}-${{ matrix.architecture }}-ubuntu24.04-ros2jazzy
 
       - name: Install QEMU
         run: |
@@ -169,11 +143,11 @@ jobs:
           This release contains custom Ubuntu ISO images pre-configured with ROS2 for robotics development.
 
           ## Images included:
-          - Ubuntu 22.04 ARM64 with ROS2 Humble (Raspberry Pi 5 optimized)
-          - Ubuntu 22.04 AMD64 with ROS2 Humble (Development machines)
+          - Ubuntu 24.04 ARM64 with ROS2 Jazzy (Raspberry Pi 5 optimized)
+          - Ubuntu 24.04 AMD64 with ROS2 Jazzy (Development machines)
 
           ## Features:
-          - Pre-installed ROS2 Humble Desktop
+          - Pre-installed ROS2 Jazzy Desktop
           - Robotics development tools
           - GPIO/I2C/SPI support (ARM64)
           - Pre-configured workspaces
