@@ -13,6 +13,10 @@ jobs:
     name: Build Custom Ubuntu ISO
     runs-on: ubuntu-latest
     strategy:
+      # Current baseline: Ubuntu 24.04 + ROS 2 Jazzy for AMD64 and ARM64.
+      # Future baseline example: Ubuntu 26.04 + ROS 2 Lyrical.
+      # When upgrading, update this matrix, the test-iso artifact name,
+      # release notes, and README together.
       matrix:
         include:
           - architecture: amd64

@@ -133,13 +133,19 @@ ros2_additional_packages:
 
 ### Automated Builds
 
-The ISO build workflow is manual-only and runs when dispatched from GitHub Actions.
+The ISO build workflow is manual-only and runs when manually dispatched via GitHub Actions.
 When started, it:
 
 1. 🏗️ Builds Ubuntu 24.04 + ROS 2 Jazzy ISOs for AMD64 and ARM64
 2. 🧪 Tests the AMD64 ISO boot path in QEMU
 3. 📦 Uploads ISO artifacts
 4. 🔐 Generates checksums
+
+Baseline upgrade note: the current workflow builds Ubuntu 24.04 + ROS 2 Jazzy
+for both AMD64 and ARM64. A future move to Ubuntu 26.04 + ROS 2 Lyrical should
+update the workflow matrix, ISO artifact names, release notes, dependency
+compatibility notes, and this README together. This PR does not change the
+baseline to Lyrical.
 
 The release job is present but disabled; manual dispatch does not publish GitHub releases.
 
