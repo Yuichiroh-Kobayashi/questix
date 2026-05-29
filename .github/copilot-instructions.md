@@ -1,5 +1,10 @@
 # Copilot Instructions for Questix
 
+## Instruction precedence
+
+- If an `AGENTS.md` file exists in this repository or in a relevant subdirectory, follow its instructions in addition to this file.
+- When instructions conflict, use the more specific file for the files being edited.
+
 ## Repository baseline
 
 - This repository is based on ROS 2 Jazzy, Ubuntu 24.04, C++17, and `ament_cmake_auto`.
