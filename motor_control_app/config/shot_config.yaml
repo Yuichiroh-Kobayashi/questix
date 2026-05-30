@@ -1,12 +1,15 @@
 shot_component:
   ros__parameters:
+    # Joy input topic
+    joy_topic: "/joy"
+
     port: "/dev/servo"
     baudrate: 115200
     pan_servo_id: 11
     trigger_servo_id: 10
     # Disc fire button / ディスク射出ボタン
     # Switch2 native index: R button = 5
-    fire_button: 0
+    fire_button: 5
     fire_duration_ms: 300 # 射撃持続時間（ミリ秒）
     # Pan input mode / パン入力モード
     # - pan_axis >= 0 : use that analog axis (e.g. D-pad vertical = 7).
