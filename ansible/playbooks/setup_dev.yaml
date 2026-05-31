@@ -107,6 +107,7 @@
         line: "{{ item }}"
         state: present
         create: true
+        mode: "0644"
       become: false
       loop:
         - "# ROS2 Development Environment"
