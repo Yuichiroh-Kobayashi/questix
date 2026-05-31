@@ -29,6 +29,19 @@
 - Do not assume directory names always match ROS package names. For example, `launcher/` maps to the ROS package name `questix_launcher`.
 - Hardware-dependent code is likely impossible to validate fully without the physical robot or target hardware.
 
+## Pull request titles
+
+- Pull request titles must follow Conventional Commits because this repository runs a semantic pull request title check.
+- Use the format: `<type>: <lowercase summary>`.
+- Common types include `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, and `revert`.
+- Prefer concise summaries after the colon.
+- Examples:
+  - `fix: resolve recursive loop in setup_dev role vars`
+  - `ci: align ISO workflow with Ubuntu 24.04 and ROS 2 Jazzy`
+  - `docs: add AI agent guidance`
+  - `chore: sync upstream main through PR #56`
+- Before opening or updating a PR, ensure the title passes the semantic pull request check.
+
 ## C++ / ROS 2 implementation policy
 
 - Use C++17 unless an existing package explicitly specifies a different standard.
@@ -43,6 +56,47 @@
 - Do not run destructive commands such as `rm -rf`, broad `chmod`, or broad `chown`.
 - Explain the expected impact before changing Ansible, shell scripts, systemd units, UART/GPIO behavior, or ISO build behavior.
 - Treat `systemd/questix_robot*`, `scripts/build-iso.sh`, and `ansible/playbooks/*.yaml` with extra care because they can have significant effects on real hardware or the OS.
+
+## Ansible and setup validation
+
+- Treat Ansible, setup scripts, ISO provisioning, and robot startup as OS-impacting areas.
+- Separate static validation from state-changing validation.
+- Safe default validation candidates:
+  - `git diff --check`
+  - `yamllint ansible/`
+  - `ansible-playbook ansible/playbooks/setup_kit.yaml --syntax-check -i localhost,`
+  - `ansible-playbook ansible/playbooks/setup_dev.yaml --syntax-check -i localhost,`
+  - `bash -n setup.sh setup_dev.sh scripts/install-robot-manager.sh scripts/apply-ansible-config.sh`
+  - sandbox-safe `make test-ansible`
+- Do not run `setup.sh`, `setup_dev.sh`, package installation, systemd commands, GPIO/UART commands, ISO build, or QEMU unless explicitly requested.
+- If a real setup run is explicitly requested, record:
+  - branch and commit
+  - host OS and architecture
+  - execution user
+  - whether `/root/ros2_ws` or `/root/.bashrc` was accidentally touched
+  - ROS 2, colcon, rosdep, and vcs post-checks
+  - skipped hardware/system checks
+
+## Ansible check mode limits
+
+- Do not assume `ansible-playbook --check --diff` fully validates installer playbooks.
+- Check mode can skip modules that do not support it, and later tasks may fail if they depend on registered variables from skipped tasks.
+- `check_mode: false` is acceptable only for read-only discovery tasks that must run to provide registered variables, such as:
+  - `whoami`
+  - HTTP GET metadata lookups
+- Do not add `check_mode: false` to package installation, `get_url` downloads, file writes, systemd operations, GPIO/UART access, or other state-changing tasks just to make check mode pass.
+- `get_url` may validate the URL in check mode without downloading the file body; do not treat a later missing downloaded file as proof that the real run will fail.
+- When check mode reaches this kind of installer limitation, report it clearly and ask before proceeding to a real setup run.
+
+## AMD64 setup_dev execution boundary
+
+- `ansible/playbooks/setup_dev.yaml` is intended for an AMD64 development machine where a regular user runs the playbook with sudo/become.
+- Keep safeguards that prevent accidental `/root/ros2_ws` or `/root/.bashrc` configuration.
+- Do not weaken `/home/...` assertions to support root-driven local or chroot execution unless explicitly requested.
+- Treat AMD64 root/chroot provisioning as a separate ISO workflow design issue.
+- Keep repository-root `ansible.cfg` and copied-subtree `ansible/ansible.cfg` roles distinct:
+  - root `ansible.cfg`: repository-root local setup and CI commands
+  - `ansible/ansible.cfg`: copied into `/tmp/ansible` for chroot provisioning and should resolve sibling `roles/`
 
 ## Validation commands
 
