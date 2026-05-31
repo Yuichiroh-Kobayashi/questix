@@ -63,6 +63,7 @@
     url: https://api.github.com/repos/ros-infrastructure/ros-apt-source/releases/latest
     return_content: true
   register: ros_apt_source_release
+  check_mode: false
   changed_when: false
 
 - name: Set ros2-apt-source version

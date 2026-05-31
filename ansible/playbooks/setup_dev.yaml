@@ -26,6 +26,7 @@
       ansible.builtin.command: whoami
       register: conn_user_whoami
       become: false
+      check_mode: false
       changed_when: false
 
     - name: Set connection user fact
@@ -107,6 +108,7 @@
         line: "{{ item }}"
         state: present
         create: true
+        mode: "0644"
       become: false
       loop:
         - "# ROS2 Development Environment"
