@@ -1,9 +1,16 @@
-# Questix Agent Guide
+# QUESTiX Agent Guide
 
 ## Project overview
 
-- Questix is a repository for robot control and ISO image builds targeting ROS 2 Jazzy on Ubuntu 24.04.
+- QUESTiX is a repository for robot control and ISO image builds targeting ROS 2 Jazzy on Ubuntu 24.04.
 - The repository contains a mix of C++ ROS 2 packages, launch/config files, Ansible assets, systemd units, and the FastAPI-based `robot_manager`.
+
+## Project naming and documentation style
+
+- Use `QUESTiX` as the project name in prose, headings, summaries, PR bodies, and generated documentation.
+- Do not mechanically rename repository names, package names, file paths, URLs, commands, service names, launch arguments, environment variables, or code identifiers.
+- Preserve existing lowercase identifiers such as `questix_launcher`, `questix_robot`, and repository/path names unless the user explicitly requests a code-level rename.
+- When generating documentation, distinguish between the product/project name `QUESTiX` and implementation identifiers such as package names or file paths.
 
 ## Environment baseline
 

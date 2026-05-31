@@ -12,6 +12,12 @@
 - Use C++17 unless an existing package explicitly specifies a different standard.
 - Keep AMD64 development and ARM64 Raspberry Pi 5 robotics-kit assumptions aligned unless the user explicitly requests otherwise.
 
+## Project naming
+
+- Use `QUESTiX` as the project name in prose and generated documentation.
+- Do not mechanically rename package names, paths, commands, URLs, environment variables, or code identifiers.
+- Preserve implementation identifiers such as `questix_launcher` unless explicitly asked to perform a code-level rename.
+
 ## Pull request titles
 
 - When creating or updating PRs, use Conventional Commits style titles.
