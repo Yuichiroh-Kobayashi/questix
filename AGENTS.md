@@ -49,12 +49,12 @@
 The following commands are standard validation candidates. Whether they can run depends on the local environment, including ROS 2 availability, Ansible/lint tooling, hardware access, and OS permissions. Hardware-dependent behavior still requires real robot/Raspberry Pi validation.
 
 - `git diff --check`
-- `colcon build --symlink-install`
-- `colcon test`
+- `colcon build --symlink-install` (run from the workspace root)
+- `colcon test` (run from the workspace root)
 - For Ansible changes: `make test-ansible`
 - For Ansible/YAML changes: `yamllint ansible/`
-- For GitHub Actions changes: workflow YAML parse checks.
+- For GitHub Actions changes: `yamllint .github/workflows/` and `actionlint` if available.
 
 ## Cross-reference caution
 
-- When changing package names, launch-file references to `find-pkg-share`, or dependency package names, perform a cross-repository search and update all related references.
+- When changing package names, launch-file references to `find-pkg-share`, or dependency package names, perform a cross-package search within this repository and update all related references.
