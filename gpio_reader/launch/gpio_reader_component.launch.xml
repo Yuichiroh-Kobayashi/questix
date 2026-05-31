@@ -8,7 +8,6 @@ GPIO Reader component-container launch (XML)
        default="$(find-pkg-share gpio_reader)/config/gpio_reader.yaml"
        description="Path to the GPIO reader configuration file" />
 
-  <!-- GPIO Reader Container -->
   <node_container pkg="rclcpp_components"
                   exec="component_container"
                   name="gpio_reader_container"
