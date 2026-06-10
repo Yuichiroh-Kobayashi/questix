@@ -12,6 +12,19 @@
 - Use C++17 unless an existing package explicitly specifies a different standard.
 - Keep AMD64 development and ARM64 Raspberry Pi 5 robotics-kit assumptions aligned unless the user explicitly requests otherwise.
 
+## Project naming
+
+- Use `QUESTiX` as the project name in prose and generated documentation.
+- Do not mechanically rename package names, paths, commands, URLs, environment variables, or code identifiers.
+- Preserve implementation identifiers such as `questix_launcher` unless explicitly asked to perform a code-level rename.
+
+## Pull request titles
+
+- When creating or updating PRs, use Conventional Commits style titles.
+- Format: `<type>: <lowercase summary>`.
+- Prefer existing project types such as `fix`, `feat`, `docs`, `ci`, `chore`, `refactor`, and `test`.
+- Example: `fix: resolve recursive loop in setup_dev role vars`.
+
 ## C++ / ROS 2 completions
 
 - Follow `.clang-format`.
@@ -30,6 +43,13 @@
 - The ROS package name for `launcher/` is `questix_launcher`.
 - Verify `find-pkg-share`, package names, launch arguments, YAML parameters, and systemd / robot_manager references together when changing launch or package paths.
 - Treat `ENABLE_LIDAR`, `ENABLE_SHOT`, `ENABLE_DRIVE`, `ENABLE_GPIO_REF`, `ENABLE_RVIZ`, and `CONTROLLER_TYPE` as launch-flow and robot-startup related variables.
+
+## Ansible/setup completions
+
+- For Ansible or setup-script edits, preserve the execution boundary in `AGENTS.md`.
+- Do not weaken AMD64 `setup_dev.yaml` safeguards against `/root/ros2_ws` or `/root/.bashrc` unless explicitly requested.
+- Do not add `check_mode: false` to state-changing tasks such as package installation, downloads, systemd operations, or hardware-facing commands just to make check mode pass.
+- If touching `ansible.cfg`, preserve the distinction between repository-root config and copied chroot config.
 
 ## High-caution areas
 
