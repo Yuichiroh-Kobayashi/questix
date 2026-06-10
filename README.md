@@ -11,7 +11,7 @@ This project provides a complete automation pipeline using Ansible and GitHub Ac
 - **Target**: Desktop/laptop development machines
 - **OS**: Ubuntu 24.04 LTS with ROS2 Jazzy
 - **Tools**: Full desktop environment, development tools, ROS2 Desktop
-- **Workspace**: Pre-configured `~/ros2_ws`
+- **Workspace**: Shell aliases pre-configured for `~/ros2_ws`
 
 ### 🍓 Robotics Kit (ARM64 - Raspberry Pi 5)
 
@@ -23,9 +23,8 @@ This project provides a complete automation pipeline using Ansible and GitHub Ac
 
 ## 🚀 Quick Start
 
-There are two setup paths: the AMD64 development machine is configured locally,
-while the Raspberry Pi 5 (ARM64) robot is provisioned remotely with Ansible
-from that development machine.
+There are two local setup paths: run the AMD64 playbook on the development
+machine and run the ARM64 kit playbook on the Raspberry Pi 5 itself.
 
 ### 1. AMD64 Development Machine (local provisioning)
 
@@ -51,14 +50,15 @@ On an x86_64 machine running Ubuntu 24.04, run Ansible against `localhost`.
    bash setup_dev.sh
    ```
 
-   This installs ROS 2 Jazzy Desktop, colcon, developer tooling, and creates
-   `~/ros2_ws`.
+   This installs ROS 2 Jazzy Desktop, colcon, developer tooling, and configures
+   shell aliases for `~/ros2_ws`.
 
 4. **Fetch workspace dependencies and build**
 
    ```bash
-   mkdir -p src
-   vcs import src < dependency.repos
+   mkdir -p ~/ros2_ws/src
+   vcs import ~/ros2_ws/src < dependency.repos
+   cd ~/ros2_ws
    source /opt/ros/jazzy/setup.bash
    rosdep update
    rosdep install --from-paths . src --ignore-src -r -y
