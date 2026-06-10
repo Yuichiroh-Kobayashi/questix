@@ -60,16 +60,33 @@ On an x86_64 machine running Ubuntu 24.04, run Ansible against `localhost`.
    mkdir -p src
    vcs import src < dependency.repos
    source /opt/ros/jazzy/setup.bash
+   rosdep update
+   rosdep install --from-paths . src --ignore-src -r -y
    colcon build --symlink-install
    source install/setup.bash
    ```
 
+   `rosdep install` resolves workspace package dependencies declared in
+   `package.xml` files. In the current tree, this includes packages such as
+   `libgpiod-dev`, `joint_state_publisher`, and `xacro`.
+
+   Known issue: `rosdep install` may report `questix_launcher: Cannot locate
+   rosdep definition for [servo_control_ros2]`. This package is listed as a
+   source/workspace dependency of `questix_launcher`, but it is not currently
+   included in `dependency.repos`. This does not block the observed AMD64 build,
+   but the dependency should be clarified separately before relying on
+   servo-related launch paths.
+
 5. **Verify**
 
    ```bash
-   ros2 --version
+   ros2 -h
+   printenv ROS_DISTRO
    ros2 topic list
    ```
+
+   `ros2 --version` is not used here because the ROS 2 CLI does not accept that
+   option in this environment.
 
 ### 2. Raspberry Pi 5 (ARM64) Setup (run on the Pi itself)
 
