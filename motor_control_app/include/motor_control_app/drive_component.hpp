@@ -77,6 +77,23 @@ private:
   double status_publish_rate_;
   std::string status_topic_;
 
+  // 制御モード関連
+  std::string control_mode_;  // "velocity" | "current"
+  double current_kp_;
+  double current_ki_;
+  double max_current_amp_;
+  double integral_limit_amp_;
+  int current_zero_deadband_rpm_;
+  bool current_invert_measured_;
+
+  // 加速度制限（スルーレート）
+  double max_linear_accel_;   // [m/s^2] 負値または0で制限無効
+  double max_angular_accel_;  // [rad/s^2] 負値または0で制限無効
+  double last_cmd_linear_;
+  double last_cmd_angular_;
+  rclcpp::Time last_cmd_time_;
+  bool has_last_cmd_;
+
   // 状態フラグ
   bool motor_initialized_;
   bool emergency_stop_active_;

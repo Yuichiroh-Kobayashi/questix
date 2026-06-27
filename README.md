@@ -60,16 +60,26 @@ On an x86_64 machine running Ubuntu 24.04, run Ansible against `localhost`.
    vcs import ~/ros2_ws/src < dependency.repos
    cd ~/ros2_ws
    source /opt/ros/jazzy/setup.bash
+   rosdep update
+   rosdep install --from-paths . src --ignore-src -r -y
    colcon build --symlink-install
    source install/setup.bash
    ```
 
+   `rosdep install` resolves workspace package dependencies declared in
+   `package.xml` files. In the current tree, this includes packages such as
+   `libgpiod-dev`, `joint_state_publisher`, and `xacro`.
+
 5. **Verify**
 
    ```bash
-   ros2 --version
+   ros2 -h
+   printenv ROS_DISTRO
    ros2 topic list
    ```
+
+   `ros2 --version` is not used here because the ROS 2 CLI does not accept that
+   option in this environment.
 
 ### 2. Raspberry Pi 5 (ARM64) Setup (run on the Pi itself)
 
@@ -274,8 +284,7 @@ The launcher package expects the following packages to be available in the same 
 workspace. They are source/workspace dependencies, not apt packages:
 
 - `ydlidar_ros2_driver`
-- `servo_control_ros2`
-- `esc_motor_control`
+- `esc_motor_control_cpp`
 - `ddt_motor_control`
 
 For Jazzy operation, confirm that each selected branch or tag in `dependency.repos`
