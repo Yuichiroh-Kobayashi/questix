@@ -2,6 +2,8 @@
 //
 #include "motor_control_lib/ddt_motor_lib.hpp"
 
+#include <sys/select.h>
+
 #include <algorithm>
 #include <thread>
 
@@ -14,6 +16,13 @@ DdtMotorLib::DdtMotorLib(const std::string& serial_port, int baud_rate)
       serial_port_(serial_port),
       baud_rate_(baud_rate),
       max_motor_rpm_(330),
+      current_kp_(0.005),
+      current_ki_(0.02),
+      max_current_amp_(2.0),
+      integral_limit_amp_(1.5),
+      current_zero_deadband_rpm_(5),
+      current_invert_measured_(false),
+      current_max_accel_rpm_per_sec_(0.0),
       serial_fd_(-1) {
   logger_ = rclcpp::get_logger("DdtMotorLib");
 }
@@ -43,6 +52,8 @@ void DdtMotorLib::shutdown() {
     closeSerial();
     motor_velocities_.clear();
     motor_feedbacks_.clear();
+    motor_modes_.clear();
+    pi_states_.clear();
     initialized_ = false;
     RCLCPP_INFO(logger_, "DDTモータライブラリが終了されました");
   }
@@ -64,7 +75,18 @@ bool DdtMotorLib::isHealthy() const {
 
 void DdtMotorLib::emergencyStop() {
   for (const auto& [motor_id, velocity] : motor_velocities_) {
-    sendMotorVelocity(motor_id, 0);
+    auto mode_it = motor_modes_.find(motor_id);
+    if (mode_it != motor_modes_.end() && mode_it->second == ControlMode::Current) {
+      // 電流モード: raw=0 を直接送信して即座にトルク解除
+      sendMotorCurrentRaw(motor_id, 0);
+      auto pi_it = pi_states_.find(motor_id);
+      if (pi_it != pi_states_.end()) {
+        pi_it->second.integral_amp = 0.0;
+        pi_it->second.has_last_t = false;
+      }
+    } else {
+      sendMotorVelocity(motor_id, 0);
+    }
     std::this_thread::sleep_for(10ms);
   }
   RCLCPP_WARN(logger_, "緊急停止が実行されました");
@@ -76,7 +98,63 @@ bool DdtMotorLib::setMotorVelocity(int motor_id, int velocity_rpm) {
     return false;
   }
 
-  return sendMotorVelocity(motor_id, velocity_rpm);
+  // モード別に分岐。未登録モータは Velocity 既定。
+  auto mode_it = motor_modes_.find(motor_id);
+  ControlMode mode = (mode_it != motor_modes_.end()) ? mode_it->second : ControlMode::Velocity;
+
+  // 目標 RPM は常に max_motor_rpm_ でクランプ
+  int rpm_ref_raw = std::clamp(velocity_rpm, -max_motor_rpm_, max_motor_rpm_);
+  motor_velocities_[motor_id] = rpm_ref_raw;
+
+  if (mode == ControlMode::Current) {
+    // スルーレート制限（加速度制限）: 目標 RPM を 1ステップあたり max_accel * dt だけ変化させる。
+    // これにより起動ステップ時の電流飽和を抑え、急加速を抑制する。
+    int rpm_ref = rpm_ref_raw;
+    if (current_max_accel_rpm_per_sec_ > 0.0) {
+      auto& st = pi_states_[motor_id];
+      auto now = std::chrono::steady_clock::now();
+      double dt = 0.01;
+      if (st.has_last_ref_t) {
+        dt = std::chrono::duration<double>(now - st.last_ref_t).count();
+        if (dt <= 0.0 || dt > 0.2) {
+          dt = 0.01;
+        }
+      } else {
+        st.ref_rpm_filtered = static_cast<double>(rpm_ref_raw);
+      }
+      st.last_ref_t = now;
+      st.has_last_ref_t = true;
+
+      double max_step = current_max_accel_rpm_per_sec_ * dt;
+      double delta = static_cast<double>(rpm_ref_raw) - st.ref_rpm_filtered;
+      if (delta > max_step) delta = max_step;
+      if (delta < -max_step) delta = -max_step;
+      st.ref_rpm_filtered += delta;
+      rpm_ref = static_cast<int>(std::lround(st.ref_rpm_filtered));
+    }
+
+    // 静止デッドバンド: ref=0 かつ実測がノイズ帯内なら、PI を走らず raw=0 を送る。
+    // これがないと measured の量子化ノイズを積分が拾い、静止時にトルクが出て微振動する。
+    if (rpm_ref == 0) {
+      int measured_rpm = 0;
+      auto fb_it = motor_feedbacks_.find(motor_id);
+      if (fb_it != motor_feedbacks_.end()) {
+        measured_rpm = static_cast<int>(fb_it->second.speed);
+      }
+      if (std::abs(measured_rpm) <= current_zero_deadband_rpm_) {
+        auto pi_it = pi_states_.find(motor_id);
+        if (pi_it != pi_states_.end()) {
+          pi_it->second.integral_amp = 0.0;
+          pi_it->second.has_last_t = false;
+        }
+        return sendMotorCurrentRaw(motor_id, 0);
+      }
+    }
+    int16_t current_raw = runCurrentLoopStep(motor_id, rpm_ref);
+    return sendMotorCurrentRaw(motor_id, current_raw);
+  }
+
+  return sendMotorVelocity(motor_id, rpm_ref_raw);
 }
 
 bool DdtMotorLib::getMotorStatus(int motor_id, int& velocity_rpm, uint8_t& temperature,
@@ -94,7 +172,13 @@ bool DdtMotorLib::getMotorStatus(int motor_id, int& velocity_rpm, uint8_t& tempe
     return false;
   }
 
-  velocity_rpm = vel_it->second;
+  // Current モードでフィードバックがあれば実測 RPM を返す。それ以外は目標値を返す（既存互換）。
+  auto mode_it = motor_modes_.find(motor_id);
+  bool prefer_measured =
+      (mode_it != motor_modes_.end() && mode_it->second == ControlMode::Current) &&
+      (feedback_it != motor_feedbacks_.end());
+
+  velocity_rpm = prefer_measured ? static_cast<int>(feedback_it->second.speed) : vel_it->second;
 
   if (feedback_it != motor_feedbacks_.end()) {
     temperature = feedback_it->second.temperature;
@@ -108,25 +192,45 @@ bool DdtMotorLib::getMotorStatus(int motor_id, int& velocity_rpm, uint8_t& tempe
 }
 
 bool DdtMotorLib::initializeMotor(int motor_id) {
-  if (!setModeVelocity(motor_id)) {
-    RCLCPP_ERROR(logger_, "モーター %d の初期化に失敗しました", motor_id);
+  return initializeMotor(motor_id, ControlMode::Velocity);
+}
+
+bool DdtMotorLib::initializeMotor(int motor_id, ControlMode mode) {
+  if (!setControlMode(motor_id, mode)) {
+    RCLCPP_ERROR(logger_, "モーター %d の初期化（モード設定）に失敗しました", motor_id);
     return false;
   }
 
-  // モーター状態を追加
+  motor_modes_[motor_id] = mode;
   motor_velocities_[motor_id] = 0;
   motor_feedbacks_[motor_id] = MotorFeedback{};
+  pi_states_[motor_id] = PiState{0.0,   0,   std::chrono::steady_clock::now(),
+                                 false, 0.0, std::chrono::steady_clock::now(),
+                                 false};
 
-  RCLCPP_INFO(logger_, "モーター %d が初期化されました", motor_id);
+  RCLCPP_INFO(logger_, "モーター %d が初期化されました (mode=%s)", motor_id,
+              mode == ControlMode::Current ? "current" : "velocity");
   return true;
 }
 
-bool DdtMotorLib::stopMotor(int motor_id) { return sendMotorVelocity(motor_id, 0); }
+bool DdtMotorLib::stopMotor(int motor_id) {
+  auto mode_it = motor_modes_.find(motor_id);
+  if (mode_it != motor_modes_.end() && mode_it->second == ControlMode::Current) {
+    auto pi_it = pi_states_.find(motor_id);
+    if (pi_it != pi_states_.end()) {
+      pi_it->second.integral_amp = 0.0;
+      pi_it->second.has_last_t = false;
+    }
+    motor_velocities_[motor_id] = 0;
+    return sendMotorCurrentRaw(motor_id, 0);
+  }
+  return sendMotorVelocity(motor_id, 0);
+}
 
 bool DdtMotorLib::stopAllMotors() {
   bool success = true;
   for (const auto& [motor_id, velocity] : motor_velocities_) {
-    success &= sendMotorVelocity(motor_id, 0);
+    success &= stopMotor(motor_id);
     std::this_thread::sleep_for(10ms);
   }
   return success;
@@ -238,17 +342,64 @@ void DdtMotorLib::closeSerial() {
 }
 
 bool DdtMotorLib::setModeVelocity(int motor_id) {
-  std::vector<uint8_t> data_fields = {static_cast<uint8_t>(motor_id), 0xA0, 0, 0, 0, 0, 0, 0, 0};
+  return setControlMode(motor_id, ControlMode::Velocity);
+}
+
+bool DdtMotorLib::setControlMode(int motor_id, ControlMode mode) {
+  // Protocol 3 (モード切替)
+  // 仕様書: {ID, 0xA0, 0,0,0,0,0,0, 0, mode_value} （DATA[9] が mode_value で CRC 無し）
+  // 既存実装互換: DATA[8] に mode_value を入れ DATA[9] を CRC8(data[0..8]) とする独自レイアウト。
+  //   既存 velocity 切替 (mode_value=0) はこの形で実機動作実績がある。
+  //   電流モードで意図通り切替できない場合は仕様書通りの形 (DATA[9]=mode_value, CRC無し) に
+  //   フォールバックすること。
+  uint8_t mode_value = 0x02;  // 速度ループ
+  if (mode == ControlMode::Current) {
+    mode_value = 0x01;  // 電流ループ
+  }
+
+  std::vector<uint8_t> data_fields = {
+      static_cast<uint8_t>(motor_id), 0xA0, 0, 0, 0, 0, 0, 0, mode_value};
   uint8_t crc = crc8Maxim(data_fields);
   data_fields.push_back(crc);
 
   bool success = sendCommand(data_fields);
   if (success) {
-    RCLCPP_INFO(logger_, "モーター %d を速度制御モードに設定しました", motor_id);
+    RCLCPP_INFO(logger_, "モーター %d を %s モードに設定しました", motor_id,
+                mode == ControlMode::Current ? "電流制御" : "速度制御");
   } else {
-    RCLCPP_ERROR(logger_, "モーター %d の速度制御モード設定に失敗しました", motor_id);
+    RCLCPP_ERROR(logger_, "モーター %d のモード設定に失敗しました", motor_id);
   }
   return success;
+}
+
+void DdtMotorLib::setCurrentControlParams(double kp, double ki, double max_current_amp,
+                                          double integral_limit_amp) {
+  current_kp_ = kp;
+  current_ki_ = ki;
+  max_current_amp_ = std::max(0.0, max_current_amp);
+  integral_limit_amp_ = std::max(0.0, integral_limit_amp);
+  RCLCPP_INFO(logger_,
+              "電流制御パラメータ更新: Kp=%.4f, Ki=%.4f, max_current=%.2fA, integral_limit=%.2fA",
+              current_kp_, current_ki_, max_current_amp_, integral_limit_amp_);
+}
+
+void DdtMotorLib::setCurrentZeroDeadbandRpm(int deadband_rpm) {
+  current_zero_deadband_rpm_ = std::max(0, deadband_rpm);
+  RCLCPP_INFO(logger_, "電流モード ゼロ近傍デッドバンド: %d RPM", current_zero_deadband_rpm_);
+}
+
+void DdtMotorLib::setCurrentInvertMeasured(bool invert) {
+  current_invert_measured_ = invert;
+  RCLCPP_INFO(logger_, "電流モード measured符号反転: %s", invert ? "ON" : "OFF");
+}
+
+void DdtMotorLib::setCurrentMaxAccelRpmPerSec(double rpm_per_sec) {
+  current_max_accel_rpm_per_sec_ = rpm_per_sec;
+  if (rpm_per_sec > 0.0) {
+    RCLCPP_INFO(logger_, "電流モード 加速度制限: %.1f RPM/s", rpm_per_sec);
+  } else {
+    RCLCPP_INFO(logger_, "電流モード 加速度制限: 無効");
+  }
 }
 
 bool DdtMotorLib::sendMotorVelocity(int motor_id, int velocity_rpm) {
@@ -272,6 +423,201 @@ bool DdtMotorLib::sendMotorVelocity(int motor_id, int velocity_rpm) {
                  velocity_int);
   }
   return success;
+}
+
+bool DdtMotorLib::sendMotorCurrentRaw(int motor_id, int16_t current_raw) {
+  // Protocol 1 (0x64) を電流指令として送信。
+  // 仕様: DATA[2]=指令上位, DATA[3]=指令下位（電流モードでは -32767..32767 が -8A..8A）
+  // 電流モードでは acceleration / brake バイトは無効。
+  // マルチバイトは big-endian (high, low)。
+  uint8_t cur_high = static_cast<uint8_t>((current_raw >> 8) & 0xFF);
+  uint8_t cur_low = static_cast<uint8_t>(current_raw & 0xFF);
+
+  std::vector<uint8_t> data_fields = {
+      static_cast<uint8_t>(motor_id), 0x64, cur_high, cur_low, 0, 0, 0, 0, 0};
+  uint8_t crc = crc8Maxim(data_fields);
+  data_fields.push_back(crc);
+
+  if (serial_fd_ < 0) {
+    return false;
+  }
+
+  // 送信前に入力バッファをクリア: 前サイクルの未取応答や遷移ゴミでの
+  // フレーム同期ずれを防ぐ（CRC 不一致ログの主原因対策）。
+  tcflush(serial_fd_, TCIFLUSH);
+
+  // 書込: 応答待ちで代替するため sleep は入れない。応答が来なければリトライ最大2回。
+  for (int attempt = 0; attempt < 3; ++attempt) {
+    ssize_t written = writeSerial(data_fields.data(), data_fields.size());
+    if (written != static_cast<ssize_t>(data_fields.size())) {
+      RCLCPP_WARN_THROTTLE(logger_, *rclcpp::Clock::make_shared(), 1000,
+                           "電流指令書込失敗 motor=%d", motor_id);
+      std::this_thread::sleep_for(5ms);
+      continue;
+    }
+    fsync(serial_fd_);
+
+    std::vector<uint8_t> frame;
+    if (readFeedbackFrame(motor_id, frame, /*timeout_ms=*/10)) {
+      parseFeedback(motor_id, frame);
+      RCLCPP_DEBUG(logger_, "モーター %d 電流指令: raw=%d", motor_id,
+                   static_cast<int>(current_raw));
+      return true;
+    }
+    // フィードバック取得失敗。前回値で PI 継続するため上位には true を返したいが、
+    // 書込自体は成功しているのでこのまま返す。ただしリトライしない（次サイクルで再送）。
+    RCLCPP_DEBUG(logger_, "モーター %d フィードバック未受信 (50ms timeout)", motor_id);
+    return true;
+  }
+  return false;
+}
+
+int16_t DdtMotorLib::runCurrentLoopStep(int motor_id, int rpm_ref) {
+  auto& st = pi_states_[motor_id];
+  auto now = std::chrono::steady_clock::now();
+
+  double dt = 0.01;  // 初回および異常時のフォールバック [s]
+  if (st.has_last_t) {
+    dt = std::chrono::duration<double>(now - st.last_t).count();
+    if (dt <= 0.0 || dt > 0.2) {
+      dt = 0.01;  // 異常値クリップ
+    }
+  }
+  st.last_t = now;
+  st.has_last_t = true;
+
+  // 実測 RPM: フィードバック未取得なら前回保持値（受信失敗時は最新フィードバックがそのまま残る）
+  int measured_rpm = 0;
+  auto fb_it = motor_feedbacks_.find(motor_id);
+  if (fb_it != motor_feedbacks_.end()) {
+    measured_rpm = static_cast<int>(fb_it->second.speed);
+  }
+  if (current_invert_measured_) {
+    measured_rpm = -measured_rpm;
+  }
+
+  double error = static_cast<double>(rpm_ref - measured_rpm);
+
+  // 積分項更新 (アンチワインドアップ: 積分項寄与 = Ki * integral を ±integral_limit_amp_
+  // にクランプ)
+  st.integral_amp += error * dt;
+  if (current_ki_ > 1e-9) {
+    double integ_clip = integral_limit_amp_ / current_ki_;
+    st.integral_amp = std::clamp(st.integral_amp, -integ_clip, integ_clip);
+  } else {
+    st.integral_amp = 0.0;
+  }
+
+  double i_cmd_amp = current_kp_ * error + current_ki_ * st.integral_amp;
+  i_cmd_amp = std::clamp(i_cmd_amp, -max_current_amp_, max_current_amp_);
+
+  // -8A..8A が -32767..32767 に対応（仕様書）
+  double raw_d = (i_cmd_amp / 8.0) * 32767.0;
+  int raw = static_cast<int>(std::lround(raw_d));
+  raw = std::clamp(raw, -32767, 32767);
+
+  RCLCPP_INFO_THROTTLE(logger_, *rclcpp::Clock::make_shared(), 200,
+                       "PI motor=%d ref=%d meas=%d err=%.1f integ=%.3fA i_cmd=%.3fA raw=%d dt=%.4f",
+                       motor_id, rpm_ref, measured_rpm, error, st.integral_amp, i_cmd_amp, raw, dt);
+  return static_cast<int16_t>(raw);
+}
+
+bool DdtMotorLib::readFeedbackFrame(int expected_motor_id, std::vector<uint8_t>& out_frame,
+                                    int timeout_ms) {
+  if (serial_fd_ < 0) {
+    return false;
+  }
+
+  out_frame.clear();
+  out_frame.reserve(10);
+  uint8_t buf[16];
+
+  auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+  while (out_frame.size() < 10) {
+    auto now = std::chrono::steady_clock::now();
+    if (now >= deadline) {
+      return false;
+    }
+    auto remain = std::chrono::duration_cast<std::chrono::microseconds>(deadline - now).count();
+
+    fd_set rfds;
+    FD_ZERO(&rfds);
+    FD_SET(serial_fd_, &rfds);
+    struct timeval tv;
+    tv.tv_sec = remain / 1000000;
+    tv.tv_usec = remain % 1000000;
+
+    int sel = select(serial_fd_ + 1, &rfds, nullptr, nullptr, &tv);
+    if (sel <= 0) {
+      return false;  // timeout or error
+    }
+
+    ssize_t need = 10 - static_cast<ssize_t>(out_frame.size());
+    ssize_t n = readSerial(buf, std::min<ssize_t>(need, static_cast<ssize_t>(sizeof(buf))));
+    if (n <= 0) {
+      // EAGAIN 等。ループ継続
+      continue;
+    }
+    for (ssize_t i = 0; i < n; ++i) {
+      // 先頭バイトは expected_motor_id のはず。それ以外なら同期外れと見なし読み飛ばし
+      if (out_frame.empty() && buf[i] != static_cast<uint8_t>(expected_motor_id)) {
+        continue;
+      }
+      out_frame.push_back(buf[i]);
+      if (out_frame.size() >= 10) {
+        // 10バイト揃った段階で CRC を検証し、失敗なら先頭 1バイトを捨てて
+        // 残りを保持したまま再同期を試みる（スライド同期）。
+        std::vector<uint8_t> payload(out_frame.begin(), out_frame.begin() + 9);
+        if (crc8Maxim(payload) == out_frame[9]) {
+          return true;
+        }
+        out_frame.erase(out_frame.begin());
+        // 残りに先頭以外の expected_motor_id以外バイトが先頭に来ていたらそこまで捨てる
+        while (!out_frame.empty() && out_frame.front() != static_cast<uint8_t>(expected_motor_id)) {
+          out_frame.erase(out_frame.begin());
+        }
+        // ループを続けて不足分を読む
+      }
+    }
+  }
+  return out_frame.size() == 10;
+}
+
+bool DdtMotorLib::parseFeedback(int expected_motor_id, const std::vector<uint8_t>& frame) {
+  if (frame.size() != 10) {
+    return false;
+  }
+  if (frame[0] != static_cast<uint8_t>(expected_motor_id)) {
+    return false;
+  }
+  // CRC8 検証（readFeedbackFrame 側でも検証済みだが、二重ガード）
+  std::vector<uint8_t> payload(frame.begin(), frame.begin() + 9);
+  uint8_t expected_crc = crc8Maxim(payload);
+  if (expected_crc != frame[9]) {
+    RCLCPP_WARN_THROTTLE(logger_, *rclcpp::Clock::make_shared(), 1000,
+                         "CRC不一致 motor=%d expected=0x%02X got=0x%02X", expected_motor_id,
+                         expected_crc, frame[9]);
+    return false;
+  }
+
+  // Protocol 1 応答フォーマット (DDT M0602C 仕様):
+  //  DATA[1]=mode, DATA[2..3]=torque current, DATA[4..5]=speed (signed),
+  //  DATA[6..7]=position, DATA[8]=fault code
+  // マルチバイトは big-endian (high, low)。
+  MotorFeedback& fb = motor_feedbacks_[expected_motor_id];
+  fb.mode = frame[1];
+  fb.current = static_cast<uint16_t>((frame[2] << 8) | frame[3]);
+  fb.speed = static_cast<int16_t>((frame[4] << 8) | frame[5]);
+  // 位置はここでは使わないが、temperature 取得は Protocol 2 (0x74) が必要。
+  // 暫定で前回値保持（既存挙動）。
+  fb.fault_code = frame[8];
+
+  // PI 状態側にも保存（受信失敗時のフォールバック用）
+  auto pi_it = pi_states_.find(expected_motor_id);
+  if (pi_it != pi_states_.end()) {
+    pi_it->second.last_measured_rpm = fb.speed;
+  }
+  return true;
 }
 
 uint8_t DdtMotorLib::crc8Maxim(const std::vector<uint8_t>& data) {
