@@ -2,9 +2,8 @@
 //
 #include "motor_control_lib/ddt_motor_lib.hpp"
 
-#include <sys/select.h>
-
 #include <algorithm>
+#include <sys/select.h>
 #include <thread>
 
 using namespace std::chrono_literals;
