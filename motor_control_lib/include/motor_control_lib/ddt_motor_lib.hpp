@@ -119,13 +119,13 @@ private:
 
   // Current モード用 PI 状態（モータ毎）
   struct PiState {
-    double integral_amp;        // 積分項（A 単位）
-    int16_t last_measured_rpm;  // 直近のフィードバックRPM（受信失敗時の保持値）
-    std::chrono::steady_clock::time_point last_t;      // 前回更新時刻
-    bool has_last_t;                                   // 初回判定
-    double ref_rpm_filtered;                           // スルーレート制限後の目標RPM
-    std::chrono::steady_clock::time_point last_ref_t;  // 前回 ref 更新時刻
-    bool has_last_ref_t;
+    double integral_amp{0.0};
+    int16_t last_measured_rpm{0};
+    std::chrono::steady_clock::time_point last_t{};
+    bool has_last_t{false};
+    double ref_rpm_filtered{0.0};
+    std::chrono::steady_clock::time_point last_ref_t{};
+    bool has_last_ref_t{false};
   };
 
   // Configuration
@@ -159,6 +159,7 @@ private:
   bool sendMotorVelocity(int motor_id, int velocity_rpm);       // velocity モード送信
   bool sendMotorCurrentRaw(int motor_id, int16_t current_raw);  // current モード送信＋応答受信
   int16_t runCurrentLoopStep(int motor_id, int rpm_ref);        // PI 1ステップ
+  void resetCurrentPiStateForStop(int motor_id);
   bool requestMotorFeedback(int motor_id);
   void processFeedbackResponse(int motor_id, const std::vector<uint8_t>& response);
   bool readFeedbackFrame(int expected_motor_id, std::vector<uint8_t>& out_frame, int timeout_ms);
