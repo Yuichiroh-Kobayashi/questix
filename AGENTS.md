@@ -57,6 +57,31 @@
 - For component implementations, keep `rclcpp_components_register_nodes` and `RCLCPP_COMPONENTS_REGISTER_NODE` entries consistent, including registration names and class names.
 - Update YAML parameters, launch arguments, and in-node `declare_parameter` / `get_parameter` usage together.
 
+## C++ formatting
+
+- C++ formatting is checked by CI with `ament_clang_format` and the repository `.clang-format`.
+- Before pushing C++ changes, run the CI-equivalent format check:
+
+  ```bash
+  source /opt/ros/jazzy/setup.bash
+  git ls-files -z -- '*.cpp' '*.hpp' | xargs -0 -r ament_clang_format --config .clang-format
+  ```
+
+- To reformat only the C++ files touched by a PR, run:
+
+  ```bash
+  source /opt/ros/jazzy/setup.bash
+  ament_clang_format --config .clang-format --reformat <changed-file-1> <changed-file-2>
+  ```
+
+- Do not reformat unrelated C++ files just to fix a PR unless the user explicitly asks for a repository-wide formatting change.
+- If `ament_clang_format` is missing on Ubuntu 24.04 / ROS 2 Jazzy, install it with:
+
+  ```bash
+  sudo apt update
+  sudo apt install -y ros-jazzy-ament-clang-format
+  ```
+
 ## Command safety
 
 - Do not run ISO builds, QEMU tests, package installation, permission changes, systemd commands, or hardware-facing commands unless explicitly requested.
