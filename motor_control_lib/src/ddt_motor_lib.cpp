@@ -2,8 +2,9 @@
 //
 #include "motor_control_lib/ddt_motor_lib.hpp"
 
-#include <algorithm>
 #include <sys/select.h>
+
+#include <algorithm>
 #include <thread>
 
 using namespace std::chrono_literals;
@@ -132,8 +133,7 @@ bool DdtMotorLib::setMotorVelocity(int motor_id, int velocity_rpm) {
             initial_ref_rpm = -initial_ref_rpm;
           }
         }
-        initial_ref_rpm = std::clamp(initial_ref_rpm,
-                                     static_cast<double>(-max_motor_rpm_),
+        initial_ref_rpm = std::clamp(initial_ref_rpm, static_cast<double>(-max_motor_rpm_),
                                      static_cast<double>(max_motor_rpm_));
         st.ref_rpm_filtered = initial_ref_rpm;
       }
