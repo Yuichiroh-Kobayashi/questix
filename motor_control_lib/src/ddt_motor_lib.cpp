@@ -78,8 +78,8 @@ void DdtMotorLib::resetCurrentPiStateForStop(int motor_id) {
   pi_state.integral_amp = 0.0;
   pi_state.has_last_t = false;
   pi_state.ref_rpm_filtered = 0.0;
-  pi_state.last_ref_t = std::chrono::steady_clock::now();
-  pi_state.has_last_ref_t = true;
+  pi_state.last_ref_t = {};
+  pi_state.has_last_ref_t = false;
 }
 
 void DdtMotorLib::emergencyStop() {
@@ -125,7 +125,18 @@ bool DdtMotorLib::setMotorVelocity(int motor_id, int velocity_rpm) {
           dt = 0.01;
         }
       } else {
-        st.ref_rpm_filtered = static_cast<double>(rpm_ref_raw);
+        double initial_ref_rpm = 0.0;
+        auto fb_it = motor_feedbacks_.find(motor_id);
+        if (fb_it != motor_feedbacks_.end()) {
+          initial_ref_rpm = static_cast<double>(fb_it->second.speed);
+          if (current_invert_measured_) {
+            initial_ref_rpm = -initial_ref_rpm;
+          }
+        }
+        initial_ref_rpm = std::clamp(initial_ref_rpm,
+                                     static_cast<double>(-max_motor_rpm_),
+                                     static_cast<double>(max_motor_rpm_));
+        st.ref_rpm_filtered = initial_ref_rpm;
       }
       st.last_ref_t = now;
       st.has_last_ref_t = true;
@@ -445,8 +456,7 @@ bool DdtMotorLib::sendMotorCurrentRaw(int motor_id, int16_t current_raw) {
   // フレーム同期ずれを防ぐ（CRC 不一致ログの主原因対策）。
   tcflush(serial_fd_, TCIFLUSH);
 
-  // 書込: 応答待ちで代替するため sleep は入れない。応答が来なければ最大3回試行する。
-  bool wrote_any = false;
+  // 書込は最大3回まで再試行する。書込成功後はフィードバックを1回だけ待つ。
   for (int attempt = 0; attempt < 3; ++attempt) {
     ssize_t written = writeSerial(data_fields.data(), data_fields.size());
     if (written != static_cast<ssize_t>(data_fields.size())) {
@@ -455,7 +465,6 @@ bool DdtMotorLib::sendMotorCurrentRaw(int motor_id, int16_t current_raw) {
       std::this_thread::sleep_for(5ms);
       continue;
     }
-    wrote_any = true;
     fsync(serial_fd_);
 
     std::vector<uint8_t> frame;
@@ -465,11 +474,10 @@ bool DdtMotorLib::sendMotorCurrentRaw(int motor_id, int16_t current_raw) {
                    static_cast<int>(current_raw));
       return true;
     }
-    // フィードバック取得失敗。前回値で PI 継続するため、書込成功後は次の試行へ進む。
-    RCLCPP_DEBUG(logger_, "モーター %d フィードバック未受信 (10ms timeout) 試行 %d/3",
-                 motor_id, attempt + 1);
+    RCLCPP_DEBUG(logger_, "モーター %d フィードバック未受信 (10ms timeout)", motor_id);
+    return true;
   }
-  return wrote_any;
+  return false;
 }
 
 int16_t DdtMotorLib::runCurrentLoopStep(int motor_id, int rpm_ref) {
