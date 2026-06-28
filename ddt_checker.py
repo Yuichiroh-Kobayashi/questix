@@ -218,28 +218,25 @@ def get_motor_info():
                 raise Exception(f"CRCエラー: 受信={received_crc:02X}, 計算={calculated_crc:02X}")
 
             # フィードバックデータの解析
+            # Protocol 1 応答は DATA[2..3]=電流、DATA[4..5]=速度、DATA[6..7]=位置、
+            # DATA[8]=故障コード。温度はこの応答には含まれない。
             id_ = data[0]
             mode = data[1]
-            current_high = data[2]
-            current_low = data[3]
-            velocity_high = data[4]
-            velocity_low = data[5]
-            stator_temp = data[6]
-            angle_8bits = data[7]
+            current_raw = int.from_bytes(response[2:4], byteorder="big", signed=True)
+            velocity = int.from_bytes(response[4:6], byteorder="big", signed=True)
+            position_raw = int.from_bytes(response[6:8], byteorder="big", signed=False)
             fault_value = data[8]
 
             # データの変換
-            current = ((current_high << 8) | current_low) / 1000.0  # mA → A
-            velocity = ((velocity_high << 8) | velocity_low)  # rpm
-            angle = angle_8bits * 360.0 / 256.0  # 8bit → 度
+            current = current_raw / 1000.0  # mA → A
 
             # 表示更新
             labels["ID"].config(text=str(id_))
             labels["Mode"].config(text=str(mode))
-            labels["Current"].config(text=f"{current:.3f} A")
+            labels["Current"].config(text=f"{current:.3f} A (raw: {current_raw})")
             labels["Velocity"].config(text=f"{velocity} rpm")
-            labels["Temperature"].config(text=f"{stator_temp} ℃")
-            labels["Angle"].config(text=f"{angle:.1f} °")
+            labels["Temperature"].config(text="N/A (not in this response)")
+            labels["Position"].config(text=f"0x{position_raw:04X}")
             labels["Fault"].config(text=f"0x{fault_value:02X}")
 
     except Exception as e:
@@ -317,11 +314,47 @@ root = tk.Tk()
 root.title("モーター状態表示 & ID設定")
 root.geometry("400x420")
 
-frame_info = ttk.LabelFrame(root, text="モーター情報", padding=10)
+main_container = ttk.Frame(root)
+main_container.pack(fill="both", expand=True)
+
+canvas = tk.Canvas(main_container, highlightthickness=0)
+scrollbar = ttk.Scrollbar(main_container, orient="vertical", command=canvas.yview)
+scrollable_frame = ttk.Frame(canvas)
+
+scrollable_window = canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+canvas.configure(yscrollcommand=scrollbar.set)
+
+def update_scroll_region(event=None):
+    canvas.configure(scrollregion=canvas.bbox("all"))
+
+def resize_scrollable_frame(event):
+    canvas.itemconfigure(scrollable_window, width=event.width)
+
+def scroll_with_mousewheel(event):
+    canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+
+def scroll_up(event):
+    canvas.yview_scroll(-1, "units")
+
+
+def scroll_down(event):
+    canvas.yview_scroll(1, "units")
+
+
+scrollable_frame.bind("<Configure>", update_scroll_region)
+canvas.bind("<Configure>", resize_scrollable_frame)
+canvas.bind_all("<MouseWheel>", scroll_with_mousewheel)
+canvas.bind_all("<Button-4>", scroll_up)
+canvas.bind_all("<Button-5>", scroll_down)
+canvas.pack(side="left", fill="both", expand=True)
+scrollbar.pack(side="right", fill="y")
+
+frame_info = ttk.LabelFrame(scrollable_frame, text="モーター情報", padding=10)
 frame_info.pack(padx=10, pady=10, fill="x")
 
 labels = {}
-for i, key in enumerate(["ID", "Mode", "Current", "Velocity", "Temperature", "Angle", "Fault", "Port Status"]):
+for i, key in enumerate(["ID", "Mode", "Current", "Velocity", "Temperature", "Position", "Fault", "Port Status"]):
     ttk.Label(frame_info, text=f"{key}:").grid(row=i, column=0, sticky="e")
     labels[key] = ttk.Label(frame_info, text="---")
     labels[key].grid(row=i, column=1, sticky="w")
@@ -332,7 +365,7 @@ ttk.Button(frame_info, text="ポート選択", command=select_port).grid(row=10,
 ttk.Button(frame_info, text="ボーレート選択", command=select_baudrate).grid(row=11, columnspan=2, pady=2)
 ttk.Button(frame_info, text="ボーレート自動検出", command=auto_detect_baudrate, style="Accent.TButton").grid(row=12, columnspan=2, pady=5)
 
-frame_set = ttk.LabelFrame(root, text="ID設定", padding=10)
+frame_set = ttk.LabelFrame(scrollable_frame, text="ID設定", padding=10)
 frame_set.pack(padx=10, pady=10, fill="x")
 
 ttk.Label(frame_set, text="新しいID (0〜255):").pack(side="left")
@@ -343,7 +376,7 @@ ttk.Button(frame_set, text="ID変更", command=set_motor_id).pack(side="left", p
 
 # ポート状態表示用ラベル
 port_list = tk.StringVar()
-ttk.Label(root, textvariable=port_list, foreground="blue").pack(pady=5)
+ttk.Label(scrollable_frame, textvariable=port_list, foreground="blue").pack(pady=5)
 
 refresh_port_status()  # 初期状態のポートチェック
 root.mainloop()
