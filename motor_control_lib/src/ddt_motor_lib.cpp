@@ -73,17 +73,22 @@ bool DdtMotorLib::isHealthy() const {
   return true;
 }
 
+void DdtMotorLib::resetCurrentPiStateForStop(int motor_id) {
+  auto& pi_state = pi_states_[motor_id];
+  pi_state.integral_amp = 0.0;
+  pi_state.has_last_t = false;
+  pi_state.ref_rpm_filtered = 0.0;
+  pi_state.last_ref_t = {};
+  pi_state.has_last_ref_t = false;
+}
+
 void DdtMotorLib::emergencyStop() {
   for (const auto& [motor_id, velocity] : motor_velocities_) {
     auto mode_it = motor_modes_.find(motor_id);
     if (mode_it != motor_modes_.end() && mode_it->second == ControlMode::Current) {
+      resetCurrentPiStateForStop(motor_id);
       // 電流モード: raw=0 を直接送信して即座にトルク解除
       sendMotorCurrentRaw(motor_id, 0);
-      auto pi_it = pi_states_.find(motor_id);
-      if (pi_it != pi_states_.end()) {
-        pi_it->second.integral_amp = 0.0;
-        pi_it->second.has_last_t = false;
-      }
     } else {
       sendMotorVelocity(motor_id, 0);
     }
@@ -120,7 +125,17 @@ bool DdtMotorLib::setMotorVelocity(int motor_id, int velocity_rpm) {
           dt = 0.01;
         }
       } else {
-        st.ref_rpm_filtered = static_cast<double>(rpm_ref_raw);
+        double initial_ref_rpm = 0.0;
+        auto fb_it = motor_feedbacks_.find(motor_id);
+        if (fb_it != motor_feedbacks_.end()) {
+          initial_ref_rpm = static_cast<double>(fb_it->second.speed);
+          if (current_invert_measured_) {
+            initial_ref_rpm = -initial_ref_rpm;
+          }
+        }
+        initial_ref_rpm = std::clamp(initial_ref_rpm, static_cast<double>(-max_motor_rpm_),
+                                     static_cast<double>(max_motor_rpm_));
+        st.ref_rpm_filtered = initial_ref_rpm;
       }
       st.last_ref_t = now;
       st.has_last_ref_t = true;
@@ -204,9 +219,7 @@ bool DdtMotorLib::initializeMotor(int motor_id, ControlMode mode) {
   motor_modes_[motor_id] = mode;
   motor_velocities_[motor_id] = 0;
   motor_feedbacks_[motor_id] = MotorFeedback{};
-  pi_states_[motor_id] = PiState{0.0,   0,   std::chrono::steady_clock::now(),
-                                 false, 0.0, std::chrono::steady_clock::now(),
-                                 false};
+  pi_states_[motor_id] = PiState{};
 
   RCLCPP_INFO(logger_, "モーター %d が初期化されました (mode=%s)", motor_id,
               mode == ControlMode::Current ? "current" : "velocity");
@@ -216,11 +229,7 @@ bool DdtMotorLib::initializeMotor(int motor_id, ControlMode mode) {
 bool DdtMotorLib::stopMotor(int motor_id) {
   auto mode_it = motor_modes_.find(motor_id);
   if (mode_it != motor_modes_.end() && mode_it->second == ControlMode::Current) {
-    auto pi_it = pi_states_.find(motor_id);
-    if (pi_it != pi_states_.end()) {
-      pi_it->second.integral_amp = 0.0;
-      pi_it->second.has_last_t = false;
-    }
+    resetCurrentPiStateForStop(motor_id);
     motor_velocities_[motor_id] = 0;
     return sendMotorCurrentRaw(motor_id, 0);
   }
@@ -446,7 +455,7 @@ bool DdtMotorLib::sendMotorCurrentRaw(int motor_id, int16_t current_raw) {
   // フレーム同期ずれを防ぐ（CRC 不一致ログの主原因対策）。
   tcflush(serial_fd_, TCIFLUSH);
 
-  // 書込: 応答待ちで代替するため sleep は入れない。応答が来なければリトライ最大2回。
+  // 書込は最大3回まで再試行する。書込成功後はフィードバックを1回だけ待つ。
   for (int attempt = 0; attempt < 3; ++attempt) {
     ssize_t written = writeSerial(data_fields.data(), data_fields.size());
     if (written != static_cast<ssize_t>(data_fields.size())) {
@@ -464,9 +473,7 @@ bool DdtMotorLib::sendMotorCurrentRaw(int motor_id, int16_t current_raw) {
                    static_cast<int>(current_raw));
       return true;
     }
-    // フィードバック取得失敗。前回値で PI 継続するため上位には true を返したいが、
-    // 書込自体は成功しているのでこのまま返す。ただしリトライしない（次サイクルで再送）。
-    RCLCPP_DEBUG(logger_, "モーター %d フィードバック未受信 (50ms timeout)", motor_id);
+    RCLCPP_DEBUG(logger_, "モーター %d フィードバック未受信 (10ms timeout)", motor_id);
     return true;
   }
   return false;
