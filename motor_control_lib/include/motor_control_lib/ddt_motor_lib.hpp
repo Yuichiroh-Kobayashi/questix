@@ -94,6 +94,14 @@ public:
    */
   void setCurrentMaxAccelRpmPerSec(double rpm_per_sec);
 
+  /**
+   * @brief 停止時に電気ブレーキ（Protocol 1 の DATA[7]=0xFF）を使うか設定。
+   *  - true のとき、stopMotor / emergencyStop の velocity 経路で目標0とともに
+   *    ブレーキ指令を送り、しっかり停止・保持する。
+   *  - ブレーキは速度ループモードでのみ有効（仕様）。current モードは対象外。
+   */
+  void setBrakeOnStop(bool enable);
+
   // DDT motor control methods (deprecated - use IIndividualMotor interface)
 
   // Multi-motor status
@@ -141,6 +149,7 @@ private:
   int current_zero_deadband_rpm_;         // 静止デッドバンド [RPM]
   bool current_invert_measured_;          // measured RPM 符号反転（正帰還押さえ用）
   double current_max_accel_rpm_per_sec_;  // 目標RPMスルーレート上限 [RPM/s]。0以下で無効
+  bool brake_on_stop_;                    // 停止時に電気ブレーキを使う（velocity モードのみ）
 
   // Serial communication
   int serial_fd_;
@@ -156,7 +165,8 @@ private:
   void closeSerial();
   bool setModeVelocity(
       int motor_id);  // 後方互換のため残置（内部で setControlMode(Velocity) を呼ぶ）
-  bool sendMotorVelocity(int motor_id, int velocity_rpm);       // velocity モード送信
+  bool sendMotorVelocity(int motor_id, int velocity_rpm,
+                         bool brake = false);                   // velocity モード送信
   bool sendMotorCurrentRaw(int motor_id, int16_t current_raw);  // current モード送信＋応答受信
   int16_t runCurrentLoopStep(int motor_id, int rpm_ref);        // PI 1ステップ
   void resetCurrentPiStateForStop(int motor_id);

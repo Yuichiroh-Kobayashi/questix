@@ -77,6 +77,9 @@ void DriveComponent::initializeParameters() {
   this->declare_parameter("max_linear_accel", 0.0);
   this->declare_parameter("max_angular_accel", 0.0);
 
+  // 停止時の電気ブレーキ（velocity モードのみ有効）
+  this->declare_parameter("brake_on_stop", true);
+
   // パラメータを取得
   serial_port_ = this->get_parameter("serial_port").as_string();
   baud_rate_ = this->get_parameter("baud_rate").as_int();
@@ -96,6 +99,7 @@ void DriveComponent::initializeParameters() {
   current_invert_measured_ = this->get_parameter("current_invert_measured").as_bool();
   max_linear_accel_ = this->get_parameter("max_linear_accel").as_double();
   max_angular_accel_ = this->get_parameter("max_angular_accel").as_double();
+  brake_on_stop_ = this->get_parameter("brake_on_stop").as_bool();
 
   RCLCPP_INFO(this->get_logger(), "Parameters initialized:");
   RCLCPP_INFO(this->get_logger(), "  serial_port: %s", serial_port_.c_str());
@@ -127,6 +131,9 @@ bool DriveComponent::initializeMotorLib() {
       RCLCPP_ERROR(this->get_logger(), "Failed to set max RPM");
       return false;
     }
+
+    // 停止時の電気ブレーキ設定（velocity モードのみ有効）
+    motor_lib_->setBrakeOnStop(brake_on_stop_);
 
     // モータライブラリを初期化
     if (!motor_lib_->initialize()) {

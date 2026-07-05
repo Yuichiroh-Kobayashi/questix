@@ -29,5 +29,10 @@ drive_component:
     max_linear_accel: 1.0    # [m/s^2] 線形加速度の上限
     max_angular_accel: 2.0   # [rad/s^2] 角加速度の上限
 
+    # 停止時の電気ブレーキ（velocity モードのみ有効）。
+    # true: スティック中立/停止時に目標0＋ブレーキ指令を送り、しっかり停止・保持する。
+    # 惰性で緩やかに減速して止まりにくい場合に有効。false で従来挙動（目標0のみ）。
+    brake_on_stop: true
+
     # パブリッシュ設定
     status_publish_rate: 10.0 # ステータスパブリッシュ頻度 [Hz]

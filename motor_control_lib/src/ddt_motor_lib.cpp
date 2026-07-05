@@ -23,6 +23,7 @@ DdtMotorLib::DdtMotorLib(const std::string& serial_port, int baud_rate)
       current_zero_deadband_rpm_(5),
       current_invert_measured_(false),
       current_max_accel_rpm_per_sec_(0.0),
+      brake_on_stop_(true),
       serial_fd_(-1) {
   logger_ = rclcpp::get_logger("DdtMotorLib");
 }
@@ -90,7 +91,8 @@ void DdtMotorLib::emergencyStop() {
       // 電流モード: raw=0 を直接送信して即座にトルク解除
       sendMotorCurrentRaw(motor_id, 0);
     } else {
-      sendMotorVelocity(motor_id, 0);
+      // 速度モード: 目標0 + 電気ブレーキでしっかり停止
+      sendMotorVelocity(motor_id, 0, brake_on_stop_);
     }
     std::this_thread::sleep_for(10ms);
   }
@@ -233,7 +235,8 @@ bool DdtMotorLib::stopMotor(int motor_id) {
     motor_velocities_[motor_id] = 0;
     return sendMotorCurrentRaw(motor_id, 0);
   }
-  return sendMotorVelocity(motor_id, 0);
+  // 速度モード: 目標0 + 電気ブレーキでしっかり停止・保持
+  return sendMotorVelocity(motor_id, 0, brake_on_stop_);
 }
 
 bool DdtMotorLib::stopAllMotors() {
@@ -411,7 +414,12 @@ void DdtMotorLib::setCurrentMaxAccelRpmPerSec(double rpm_per_sec) {
   }
 }
 
-bool DdtMotorLib::sendMotorVelocity(int motor_id, int velocity_rpm) {
+void DdtMotorLib::setBrakeOnStop(bool enable) {
+  brake_on_stop_ = enable;
+  RCLCPP_INFO(logger_, "停止時電気ブレーキ: %s", enable ? "ON" : "OFF");
+}
+
+bool DdtMotorLib::sendMotorVelocity(int motor_id, int velocity_rpm, bool brake) {
   int velocity_int = std::clamp(velocity_rpm, -max_motor_rpm_, max_motor_rpm_);
 
   // 仕様 (M0602C プロトコル1): DATA[2]=指令上位8bit, DATA[3]=指令下位8bit。
@@ -419,8 +427,10 @@ bool DdtMotorLib::sendMotorVelocity(int motor_id, int velocity_rpm) {
   uint8_t vel_high = static_cast<uint8_t>((velocity_int >> 8) & 0xFF);
   uint8_t vel_low = static_cast<uint8_t>(velocity_int & 0xFF);
 
+  // DATA[6]=加速時間, DATA[7]=ブレーキ（0xFF でブレーキ、速度ループモードのみ有効）。
+  uint8_t brake_byte = brake ? 0xFF : 0x00;
   std::vector<uint8_t> data_fields = {
-      static_cast<uint8_t>(motor_id), 0x64, vel_high, vel_low, 0, 0, 0, 0, 0};
+      static_cast<uint8_t>(motor_id), 0x64, vel_high, vel_low, 0, 0, 10, brake_byte, 0};
 
   uint8_t crc = crc8Maxim(data_fields);
   data_fields.push_back(crc);

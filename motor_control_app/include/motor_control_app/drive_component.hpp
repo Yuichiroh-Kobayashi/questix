@@ -94,6 +94,9 @@ private:
   rclcpp::Time last_cmd_time_;
   bool has_last_cmd_;
 
+  // 停止時の電気ブレーキ（velocity モードのみ）
+  bool brake_on_stop_;
+
   // 状態フラグ
   bool motor_initialized_;
   bool emergency_stop_active_;
