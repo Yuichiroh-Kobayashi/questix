@@ -414,11 +414,13 @@ void DdtMotorLib::setCurrentMaxAccelRpmPerSec(double rpm_per_sec) {
 bool DdtMotorLib::sendMotorVelocity(int motor_id, int velocity_rpm) {
   int velocity_int = std::clamp(velocity_rpm, -max_motor_rpm_, max_motor_rpm_);
 
-  uint8_t vel_low = static_cast<uint8_t>(velocity_int & 0xFF);
+  // 仕様 (M0602C プロトコル1): DATA[2]=指令上位8bit, DATA[3]=指令下位8bit。
+  // マルチバイトは big-endian (high, low)。sendMotorCurrentRaw と同じ並び。
   uint8_t vel_high = static_cast<uint8_t>((velocity_int >> 8) & 0xFF);
+  uint8_t vel_low = static_cast<uint8_t>(velocity_int & 0xFF);
 
   std::vector<uint8_t> data_fields = {
-      static_cast<uint8_t>(motor_id), 0x64, vel_low, vel_high, 0, 0, 0, 0, 0};
+      static_cast<uint8_t>(motor_id), 0x64, vel_high, vel_low, 0, 0, 0, 0, 0};
 
   uint8_t crc = crc8Maxim(data_fields);
   data_fields.push_back(crc);
