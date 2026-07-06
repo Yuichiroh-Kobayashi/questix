@@ -1,5 +1,8 @@
 // Copyright 2026 scramble-robot
 //
+// Use of this source code is governed by an MIT-style
+// license that can be found in the LICENSE file or at
+// https://opensource.org/licenses/MIT.
 #ifndef ESC_MOTOR_CONTROL_CPP__ESC_MOTOR_CONTROL_COMPONENT_HPP_
 #define ESC_MOTOR_CONTROL_CPP__ESC_MOTOR_CONTROL_COMPONENT_HPP_
 
@@ -57,7 +60,7 @@ private:
   double current_speed_{0.0};
   bool emergency_stop_active_{false};
   bool full_speed_active_{false};
-  rclcpp::Time last_command_time_;
+  rclcpp::Time last_command_time_{0, 0, RCL_ROS_TIME};
   std::mutex lock_;
 
   // ---------- PWM ----------
