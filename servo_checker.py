@@ -224,8 +224,15 @@ def _transact(ser: serial.Serial, frame: bytes) -> bytes:
             data += ser.read(trailing)
         return data
 
-    # in_waiting が 0 のままでも、タイムアウトまでブロッキングで待ってみる
-    return ser.read(16)
+    # in_waiting が 0 のままでも、まず 1 バイトだけ待って応答開始を確認する。
+    first_byte = ser.read(1)
+    if first_byte:
+        time.sleep(0.01)
+        trailing = ser.in_waiting
+        if trailing:
+            return first_byte + ser.read(trailing)
+        return first_byte
+    return b""
 
 
 def _find_read_frame(data: bytes, servo_id: int):
