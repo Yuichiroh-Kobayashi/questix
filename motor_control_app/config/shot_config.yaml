@@ -3,6 +3,13 @@ shot_component:
     # Joy input topic
     joy_topic: "/joy"
 
+    # Lifecycle auto start / ライフサイクル自動起動
+    # 非常停止中はサーボが通電されず接続できないため、unconfigured で待機し
+    # connect_retry_period_sec 間隔で接続を再試行、成功したら自動で activate する。
+    # false にすると ros2 lifecycle set で手動遷移する運用になる。
+    auto_start: true
+    connect_retry_period_sec: 3.0
+
     port: "/dev/servo"
     baudrate: 115200
     tilt_servo_id: 11
