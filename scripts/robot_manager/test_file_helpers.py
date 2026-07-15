@@ -71,6 +71,30 @@ class ReadEnvFileTests(unittest.TestCase):
                 {"ROBOT_WS": "/home/robot/ws", "ENABLED": "true"},
             )
 
+    def test_utf8_comment_file_is_parsed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "robot.env"
+            path.write_text(
+                "# 録画設定\nROBOT_WS=/home/robot/ws\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                recorder._read_env_file(path),
+                {"ROBOT_WS": "/home/robot/ws"},
+            )
+
+    def test_invalid_utf8_is_reported_as_decode_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "robot.env"
+            path.write_bytes(b"ROBOT_WS=/home/robot/\xff\n")
+
+            with self.assertRaises(OSError) as raised:
+                recorder._read_env_file(path)
+
+        self.assertIn("failed to decode environment file", str(raised.exception))
+        self.assertIsInstance(raised.exception.__cause__, UnicodeError)
+
     def test_permission_error_is_not_silenced(self):
         path = Path("/private/robot.env")
         with patch.object(Path, "read_text", side_effect=PermissionError("denied")):
@@ -116,6 +140,22 @@ class CopyTailTests(unittest.TestCase):
             output = dest.read_bytes()
             self.assertIn(b"older entries omitted", output)
             self.assertTrue(output.endswith(b"6789"))
+
+    def test_utf8_tail_starts_at_character_boundary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "source.log"
+            dest = Path(tmp) / "dest.log"
+            src.write_text("甲乙丙丁", encoding="utf-8")
+
+            self.assertTrue(logs._copy_tail(src, dest, 8))
+            output = dest.read_bytes()
+            decoded = output.decode("utf-8")
+            marker, tail = output.split(b"\n", 1)
+
+            self.assertIn(b"older entries omitted", marker)
+            self.assertTrue(decoded.endswith("丙丁"))
+            self.assertEqual(tail.decode("utf-8"), "丙丁")
+            self.assertLessEqual(len(tail), 8)
 
     def test_zero_limit_writes_only_truncation_marker(self):
         with tempfile.TemporaryDirectory() as tmp:
