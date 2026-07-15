@@ -83,7 +83,12 @@ ShotComponent::ShotComponent(const rclcpp::NodeOptions& options)
   }
 }
 
-ShotComponent::~ShotComponent() { disconnectServo(); }
+ShotComponent::~ShotComponent() {
+  if (auto_start_timer_) {
+    auto_start_timer_->cancel();
+  }
+  disconnectServo();
+}
 
 void ShotComponent::autoStartTimerCallback() {
   const uint8_t state_id = this->get_current_state().id();
@@ -183,6 +188,9 @@ ShotComponent::CallbackReturn ShotComponent::on_activate(const rclcpp_lifecycle:
   RCLCPP_INFO(this->get_logger(),
               "Fire angle: %.1f deg, Home angle: %.1f deg, Current tilt: %.1f deg", fire_angle_,
               home_angle_, current_tilt_angle_);
+  if (auto_start_timer_) {
+    auto_start_timer_->cancel();
+  }
   return CallbackReturn::SUCCESS;
 }
 
@@ -210,6 +218,9 @@ ShotComponent::CallbackReturn ShotComponent::on_error(const rclcpp_lifecycle::St
   // unconfigured に戻し、auto_start タイマーの再試行に委ねる。
   joy_subscription_.reset();
   disconnectServo();
+  if (auto_start_ && auto_start_timer_) {
+    auto_start_timer_->reset();
+  }
   RCLCPP_WARN(this->get_logger(), "Shot component error handled, returning to unconfigured");
   return CallbackReturn::SUCCESS;
 }
