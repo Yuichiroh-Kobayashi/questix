@@ -109,6 +109,8 @@ void ShotComponent::autoStartTimerCallback() {
                   "サーボ通信故障を検出。deactivate→cleanup して再接続を試みます");
       this->deactivate();
       this->cleanup();
+      // on_deactivate がタイマーを止めるため、自動復帰経路のみここで再開する
+      auto_start_timer_->reset();
     } else {
       // 正常稼働中はタイマーを止め、手動 deactivate/cleanup を尊重する。
       auto_start_timer_->cancel();
@@ -210,6 +212,13 @@ ShotComponent::CallbackReturn ShotComponent::on_activate(const rclcpp_lifecycle:
 }
 
 ShotComponent::CallbackReturn ShotComponent::on_deactivate(const rclcpp_lifecycle::State&) {
+  // 手動 deactivate を含め、deactivate では自動再遷移を必ず止める。故障検出から
+  // タイマー発火までの間に手動 deactivate されても再 activate しないための処置で、
+  // 自動復帰経路（autoStartTimerCallback）は cleanup 後にタイマーを明示的に再開する。
+  runtime_fault_ = false;
+  if (auto_start_timer_) {
+    auto_start_timer_->cancel();
+  }
   RCLCPP_INFO(this->get_logger(), "Shot component deactivated (joy input ignored)");
   return CallbackReturn::SUCCESS;
 }
