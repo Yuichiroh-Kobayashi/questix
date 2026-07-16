@@ -124,12 +124,24 @@ def _copy_tail(src: Path, dest: Path, max_bytes: int) -> bool:
 
     Returns True if the file was truncated (tail only).
     """
-    size = src.stat().st_size
+    max_bytes = max(0, max_bytes)
     with src.open("rb") as fsrc, dest.open("wb") as fdst:
+        fsrc.seek(0, 2)
+        size = fsrc.tell()
         truncated = size > max_bytes
         if truncated:
             fsrc.seek(size - max_bytes)
+            if max_bytes > 0:
+                while True:
+                    byte = fsrc.read(1)
+                    if not byte:
+                        break
+                    if (byte[0] & 0xC0) != 0x80:
+                        fsrc.seek(-1, 1)
+                        break
             fdst.write("# ... (先頭を切り捨て / older entries omitted) ...\n".encode("utf-8"))
+        else:
+            fsrc.seek(0)
         shutil.copyfileobj(fsrc, fdst)
     return truncated
 
