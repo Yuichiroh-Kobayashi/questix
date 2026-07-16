@@ -123,14 +123,43 @@ async function collectLogs() {
 
 function renderLogResult(data) {
   const box = document.getElementById("log-result");
-  const rows = (data.notes || [])
-    .map((n) => `<div class="log-note"><span class="log-note-label">${n.label}</span><span class="log-note-text">${n.note}</span></div>`)
-    .join("");
-  box.innerHTML = `
-    <div class="log-result-head">保存しました</div>
-    <div class="log-result-path">${data.path}</div>
-    <div class="log-result-size">サイズ: ${fmtBytes(data.size_bytes)}</div>
-    <div class="log-notes">${rows}</div>`;
+  while (box.firstChild) box.removeChild(box.firstChild);
+
+  const head = document.createElement("div");
+  head.className = "log-result-head";
+  head.textContent = "保存しました";
+
+  const path = document.createElement("div");
+  path.className = "log-result-path";
+  path.textContent = data.path;
+
+  const size = document.createElement("div");
+  size.className = "log-result-size";
+  size.textContent = `サイズ: ${fmtBytes(data.size_bytes)}`;
+
+  const notes = document.createElement("div");
+  notes.className = "log-notes";
+  for (const n of data.notes || []) {
+    const row = document.createElement("div");
+    row.className = "log-note";
+
+    const label = document.createElement("span");
+    label.className = "log-note-label";
+    label.textContent = n.label;
+
+    const note = document.createElement("span");
+    note.className = "log-note-text";
+    note.textContent = n.note;
+
+    row.appendChild(label);
+    row.appendChild(note);
+    notes.appendChild(row);
+  }
+
+  box.appendChild(head);
+  box.appendChild(path);
+  box.appendChild(size);
+  box.appendChild(notes);
   box.classList.remove("hidden");
 }
 
@@ -227,22 +256,46 @@ async function refreshBagList() {
   }
   document.getElementById("disk-used-text").textContent = fmtBytes(data.total_used_bytes);
   const list = document.getElementById("rec-bag-list");
-  list.innerHTML = "";
+  while (list.firstChild) list.removeChild(list.firstChild);
   if (!data.bags.length) {
-    list.innerHTML = '<li class="rec-bag-empty">バッグはまだありません</li>';
+    const empty = document.createElement("li");
+    empty.className = "rec-bag-empty";
+    empty.textContent = "バッグはまだありません";
+    list.appendChild(empty);
     return;
   }
   for (const bag of data.bags) {
     const li = document.createElement("li");
     li.className = "rec-bag-item" + (bag.recording ? " recording" : "");
     const date = bag.mtime ? new Date(bag.mtime * 1000).toLocaleString("ja-JP") : "";
-    li.innerHTML = `
-      <div class="rec-bag-main">
-        <span class="rec-bag-name">${bag.name}${bag.recording ? " ●REC" : ""}</span>
-        <span class="rec-bag-meta">${fmtBytes(bag.size_bytes)} · ${date}</span>
-        <span class="rec-bag-path">${bag.path}</span>
-      </div>
-      <button class="btn btn-small btn-del" data-bag="${bag.name}" ${bag.recording ? "disabled" : ""}>削除</button>`;
+
+    const main = document.createElement("div");
+    main.className = "rec-bag-main";
+
+    const name = document.createElement("span");
+    name.className = "rec-bag-name";
+    name.textContent = bag.name + (bag.recording ? " ●REC" : "");
+
+    const meta = document.createElement("span");
+    meta.className = "rec-bag-meta";
+    meta.textContent = `${fmtBytes(bag.size_bytes)} · ${date}`;
+
+    const path = document.createElement("span");
+    path.className = "rec-bag-path";
+    path.textContent = bag.path;
+
+    main.appendChild(name);
+    main.appendChild(meta);
+    main.appendChild(path);
+
+    const btn = document.createElement("button");
+    btn.className = "btn btn-small btn-del";
+    btn.dataset.bag = bag.name;
+    btn.textContent = "削除";
+    btn.disabled = Boolean(bag.recording);
+
+    li.appendChild(main);
+    li.appendChild(btn);
     list.appendChild(li);
   }
 }

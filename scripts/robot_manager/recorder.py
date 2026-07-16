@@ -71,7 +71,7 @@ def _read_env_file(path: Path) -> dict[str, str]:
     """Parse a shell-style KEY=value file, skipping comments and blanks."""
     result: dict[str, str] = {}
     try:
-        for line in path.read_text().splitlines():
+        for line in path.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
@@ -80,6 +80,10 @@ def _read_env_file(path: Path) -> dict[str, str]:
                 result[m.group(1)] = m.group(2)
     except FileNotFoundError:
         pass
+    except UnicodeError as exc:
+        raise OSError(f"failed to decode environment file {path}: {exc}") from exc
+    except OSError as exc:
+        raise OSError(f"failed to read environment file {path}: {exc}") from exc
     return result
 
 
@@ -88,6 +92,14 @@ def _read_config() -> dict[str, str]:
     config = dict(_DEFAULT_CONFIG)
     config.update(_read_env_file(ROSBAG_ENV_FILE))
     return config
+
+
+def _read_config_for_api() -> dict[str, str]:
+    """Read recorder config, mapping filesystem failures to a safe API error."""
+    try:
+        return _read_config()
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail="録画設定を読み込めません") from exc
 
 
 def _write_config(config: dict[str, str]) -> None:
@@ -314,7 +326,7 @@ def _watch_disk(output_dir: Path, min_free: int) -> None:
 # ---------------------------------------------------------------------------
 
 def _status_payload() -> dict:
-    config = _read_config()
+    config = _read_config_for_api()
     output_dir = Path(config["OUTPUT_DIR"])
     free, total = _disk_usage(output_dir)
     recording = _proc is not None and _proc.poll() is None
@@ -352,7 +364,7 @@ def start_recording():
         if _proc is not None and _proc.poll() is None:
             raise HTTPException(status_code=409, detail="録画中です")
 
-        config = _read_config()
+        config = _read_config_for_api()
         vehicle = config["VEHICLE_NAME"]
         if not _VEHICLE_RE.match(vehicle):
             raise HTTPException(status_code=400, detail="VEHICLE_NAME が不正です")
@@ -375,7 +387,10 @@ def start_recording():
 
         bag_name = f"{vehicle}_{datetime.now():%Y%m%d_%H%M%S}"
         bag_path = output_dir / bag_name
-        script = _build_record_command(config, bag_path)
+        try:
+            script = _build_record_command(config, bag_path)
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail="録画設定を読み込めません") from exc
 
         try:
             proc = subprocess.Popen(
@@ -428,13 +443,13 @@ def stop_recording():
 @router.get("/config")
 def get_config():
     """Return the recorder configuration."""
-    return _read_config()
+    return _read_config_for_api()
 
 
 @router.put("/config")
 def set_config(config: RecorderConfig):
     """Update recorder configuration (rosbag.env)."""
-    current = _read_config()
+    current = _read_config_for_api()
     update = {k: v for k, v in config.model_dump().items() if v is not None}
     current.update(update)
     try:
@@ -447,7 +462,7 @@ def set_config(config: RecorderConfig):
 @router.get("/list")
 def list_bags():
     """List recorded bags in OUTPUT_DIR with size / mtime / mcap presence."""
-    config = _read_config()
+    config = _read_config_for_api()
     output_dir = Path(config["OUTPUT_DIR"])
     bags = []
     total_used = 0
@@ -486,7 +501,7 @@ def delete_bag(ref: BagRef):
     name = ref.bag_name
     if not name or "/" in name or name.startswith(".") or name in ("", ".", ".."):
         raise HTTPException(status_code=400, detail="バッグ名が不正です")
-    config = _read_config()
+    config = _read_config_for_api()
     output_dir = Path(config["OUTPUT_DIR"]).resolve()
     target = (output_dir / name).resolve()
     if target.parent != output_dir or not target.is_dir():
@@ -507,7 +522,7 @@ def delete_bag(ref: BagRef):
 
 def _browse_start_path() -> Path:
     """Return the default starting directory for the folder browser."""
-    output_dir = Path(_read_config()["OUTPUT_DIR"])
+    output_dir = Path(_read_config_for_api()["OUTPUT_DIR"])
     if output_dir.is_dir():
         return output_dir
     ancestor = _existing_ancestor(output_dir)
@@ -530,7 +545,7 @@ def get_locations():
 
     add("ホーム", Path.home(), "home")
     add("既定", Path(_DEFAULT_CONFIG["OUTPUT_DIR"]), "default")
-    add("現在の設定", Path(_read_config()["OUTPUT_DIR"]), "current")
+    add("現在の設定", Path(_read_config_for_api()["OUTPUT_DIR"]), "current")
 
     # Removable media: real mount points under the usual automount roots.
     candidates: list[Path] = []

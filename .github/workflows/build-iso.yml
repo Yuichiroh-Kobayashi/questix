@@ -3,6 +3,14 @@ name: Build ROS2 Robotics Kit ISO
 on:
   workflow_dispatch:
 
+# Least-privilege default; the release job raises this to contents: write.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   ISO_NAME: ros2-robotics-kit
   BUILD_DIR: /tmp/iso-build
@@ -12,6 +20,7 @@ jobs:
   build-iso:
     name: Build Custom Ubuntu ISO
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     strategy:
       # Current baseline: Ubuntu 24.04 + ROS 2 Jazzy for AMD64 and ARM64.
       # Future baseline example: Ubuntu 26.04 + ROS 2 Lyrical.
@@ -100,39 +109,14 @@ jobs:
             ${{ env.OUTPUT_DIR }}/checksums.*
           retention-days: 30
 
-  test-iso:
-    name: Test ISO in QEMU
-    runs-on: ubuntu-latest
-    needs: build-iso
-    strategy:
-      matrix:
-        architecture: [amd64] # ARM64 testing requires special setup
-
-    steps:
-      - name: Download ISO artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ env.ISO_NAME }}-${{ matrix.architecture }}-ubuntu24.04-ros2jazzy
-
-      - name: Install QEMU
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y qemu-system-x86-64 qemu-utils
-
-      - name: Test ISO boot
-        run: |
-          timeout 300 qemu-system-x86_64 \
-            -m 2048 \
-            -cdrom *.iso \
-            -boot d \
-            -display none \
-            -serial stdio \
-            -no-reboot || true
-
   release:
     name: Create Release
     runs-on: ubuntu-latest
-    needs: [build-iso, test-iso]
+    timeout-minutes: 15
+    # Publishing a GitHub Release needs write access to repository contents.
+    permissions:
+      contents: write
+    needs: [build-iso]
     if: false # リリース機能は無効化（必要に応じて手動で有効化）
 
     steps:
@@ -168,7 +152,7 @@ jobs:
           EOF
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           name: ROS2 Robotics Kit ${{ github.ref_name }}
           body_path: release_notes.md

@@ -1,35 +1,69 @@
 name: ROS2 Build and Test
 
-# The paths-ignore lists below must stay identical to the paths lists in
-# ros2-build-test-skipped.yaml, which reports a passing "build-summary"
-# check for PRs this workflow skips (see that file for details).
+# This workflow always triggers on push/pull_request to main. The first job,
+# "changes", detects whether the changed paths are build-relevant. Doc/infra
+# -only changes (".github/**", "**.md", "ansible/**", "docker/**",
+# "scripts/**") skip the heavy build-and-test/static-analysis/format-check
+# jobs, but "build-summary" still runs and reports so it remains a single,
+# always-present required check (no separate no-op companion workflow).
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - ".github/**"
-      - "**.md"
-      - "ansible/**"
-      - "docker/**"
-      - "scripts/**"
   pull_request:
     branches: [main]
-    paths-ignore:
-      - ".github/**"
-      - "**.md"
-      - "ansible/**"
-      - "docker/**"
-      - "scripts/**"
   workflow_dispatch:
+
+# Least-privilege default: no job needs write access to the repository.
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same PR; keep every push to main building so
+# each commit on the default branch is validated.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 defaults:
   run:
     shell: bash
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      build: ${{ steps.filter.outputs.build }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect build-relevant changes
+        id: filter
+        run: |
+          # push / workflow_dispatch は常に実ビルド（main の各コミットを検証）
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          base="$(git merge-base "origin/${{ github.base_ref }}" HEAD)"
+          build=false
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            case "$f" in
+              .github/*|ansible/*|docker/*|scripts/*|*.md) ;;
+              *) build=true ;;
+            esac
+          done < <(git diff --name-only "$base" HEAD)
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+
   build-and-test:
     name: build-and-test (${{ matrix.ros_distro }}, ${{ matrix.architecture }})
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
     strategy:
       matrix:
         include:
@@ -102,15 +136,20 @@ jobs:
           rosdep keys --from-paths . --rosdistro $ROS_DISTRO > rosdep_keys.txt || echo "No rosdep keys found"
           EOF
 
+      # Bump the "build-v1-" epoch in the key/restore-keys below (v1 -> v2 ...)
+      # to force-invalidate every cache; a whole build/install tree is the usual
+      # suspect for inexplicable build errors after a branch switch. The key also
+      # hashes dependency.repos and the vcs-imported src/ packages so ydlidar
+      # version bumps bust the cache (top-level '*/…' globs never matched src/).
       - name: Cache build artifacts
         uses: actions/cache@v4
         with:
           path: |
             build
             install
-          key: build-${{ matrix.ros_distro }}-${{ runner.os }}-${{ matrix.architecture }}-${{ hashFiles('*/CMakeLists.txt', '*/*.cmake', '*/package.xml') }}
+          key: build-v1-${{ matrix.ros_distro }}-${{ runner.os }}-${{ matrix.architecture }}-${{ hashFiles('*/CMakeLists.txt', '*/*.cmake', '*/package.xml', 'src/**/CMakeLists.txt', 'src/**/package.xml', 'dependency.repos') }}
           restore-keys: |
-            build-${{ matrix.ros_distro }}-${{ runner.os }}-${{ matrix.architecture }}-
+            build-v1-${{ matrix.ros_distro }}-${{ runner.os }}-${{ matrix.architecture }}-
 
       - name: Install package dependencies
         run: |
@@ -204,7 +243,10 @@ jobs:
         run: docker stop ros_build && docker rm ros_build || true
 
   static-analysis:
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     container:
       image: ros:${{ matrix.ros_distro }}-ros-base
     env:
@@ -234,7 +276,10 @@ jobs:
           find . -name "*.py" -not -path "./__pycache__/*" -not -path "./build/*" -not -path "./install/*" -not -path "./log/*" -not -path "./scripts/*" -not -name "ddt_checker.py" -not -name "test_esc.py" | xargs -r python3 -m pydocstyle --ignore=D100,D101,D102,D103,D104,D105,D107,D203,D213,D400,D415
 
   format-check:
+    needs: changes
+    if: needs.changes.outputs.build == 'true' && github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     container:
       image: ros:${{ matrix.ros_distro }}-ros-base
     env:
@@ -242,7 +287,6 @@ jobs:
     strategy:
       matrix:
         ros_distro: [jazzy]
-    if: github.event_name == 'pull_request'
     steps:
       - name: Suppress git warnings
         run: git config --global --add safe.directory '*'
@@ -265,14 +309,19 @@ jobs:
           git ls-files -z -- '*.cpp' '*.hpp' | xargs -0 -r ament_clang_format --config .clang-format
 
   build-summary:
-    needs: [build-and-test, static-analysis, format-check]
+    needs: [changes, build-and-test, static-analysis, format-check]
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     if: always()
     steps:
       - name: Build Summary
         run: |
           echo "## Build Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ needs.changes.outputs.build }}" != "true" ]; then
+            echo "⏭️ **Build and Test**: skipped (no build-relevant changes)" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
           if [ "${{ needs.build-and-test.result }}" == "success" ]; then
             echo "✅ **Build and Test**: Passed" >> $GITHUB_STEP_SUMMARY
           else
@@ -296,6 +345,14 @@ jobs:
       # format-check is allowed to be skipped (it only runs on pull_request).
       - name: Fail if any required job failed
         run: |
+          if [ "${{ needs.changes.result }}" != "success" ]; then
+            echo "changes job result: ${{ needs.changes.result }}"
+            exit 1
+          fi
+          if [ "${{ needs.changes.outputs.build }}" != "true" ]; then
+            echo "No build-relevant changes; passing without running the build."
+            exit 0
+          fi
           if [ "${{ needs.build-and-test.result }}" != "success" ]; then
             echo "build-and-test result: ${{ needs.build-and-test.result }}"
             exit 1
