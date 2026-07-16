@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <exception>
 #include <functional>
 #include <lifecycle_msgs/msg/state.hpp>
 #include <string>
@@ -95,26 +96,98 @@ ShotComponent::~ShotComponent() {
 
 void ShotComponent::autoStartTimerCallback() {
   const uint8_t state_id = this->get_current_state().id();
-  if (state_id == lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED) {
-    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 30000,
-                         "サーボ接続を試行します（非常停止中は失敗し、解除後に自動復帰します）");
-    this->configure();
-  } else if (state_id == lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE) {
-    this->activate();
-  } else if (state_id == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
-    if (runtime_fault_.exchange(false)) {
-      // ACTIVE 中に検出したサーボ通信故障からの自動復帰。一旦 deactivate→cleanup
-      // で解体し、次周期以降の configure→activate で接続とサーボ応答を確認し直す。
-      RCLCPP_WARN(this->get_logger(),
-                  "サーボ通信故障を検出。deactivate→cleanup して再接続を試みます");
-      this->deactivate();
-      this->cleanup();
-      // on_deactivate がタイマーを止めるため、自動復帰経路のみここで再開する
-      auto_start_timer_->reset();
-    } else {
-      // 正常稼働中はタイマーを止め、手動 deactivate/cleanup を尊重する。
+  try {
+    if (state_id == lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED) {
+      RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 30000,
+                           "サーボ接続を試行します（非常停止中は失敗し、解除後に自動復帰します）");
+      this->configure();
+    } else if (state_id == lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE) {
+      this->activate();
+    } else if (state_id == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
+      if (runtime_fault_.exchange(false)) {
+        // ACTIVE 中に検出したサーボ通信故障からの自動復帰。一旦 deactivate→cleanup
+        // で解体し、次周期以降の configure→activate で接続とサーボ応答を確認し直す。
+        RCLCPP_WARN(this->get_logger(),
+                    "サーボ通信故障を検出。deactivate→cleanup して再接続を試みます");
+        const uint8_t state_after_deactivate = this->deactivate().id();
+        if (state_after_deactivate == lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE) {
+          const uint8_t state_after_cleanup = this->cleanup().id();
+          if (state_after_cleanup == lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED) {
+            // on_deactivate がタイマーを止めるため、自動復帰経路のみここで再開する。
+            if (auto_start_timer_) {
+              auto_start_timer_->reset();
+            }
+          } else {
+            if (state_after_cleanup == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
+              runtime_fault_.store(true);
+              if (auto_start_timer_) {
+                auto_start_timer_->reset();
+              }
+            } else if (state_after_cleanup == lifecycle_msgs::msg::State::PRIMARY_STATE_FINALIZED) {
+              if (auto_start_timer_) {
+                auto_start_timer_->cancel();
+              }
+            }
+            RCLCPP_WARN(this->get_logger(),
+                        "Lifecycle cleanup did not reach UNCONFIGURED (state=%u)",
+                        static_cast<unsigned int>(state_after_cleanup));
+          }
+        } else if (state_after_deactivate ==
+                   lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED) {
+          // on_error() がリソースを解放し、タイマーを再開済み。
+        } else if (state_after_deactivate == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
+          runtime_fault_.store(true);
+          if (auto_start_timer_) {
+            auto_start_timer_->reset();
+          }
+          RCLCPP_WARN(this->get_logger(),
+                      "Lifecycle deactivate did not leave ACTIVE; recovery will retry");
+        } else {
+          if (state_after_deactivate == lifecycle_msgs::msg::State::PRIMARY_STATE_FINALIZED &&
+              auto_start_timer_) {
+            auto_start_timer_->cancel();
+          }
+          RCLCPP_WARN(this->get_logger(), "Unexpected state after deactivate (state=%u)",
+                      static_cast<unsigned int>(state_after_deactivate));
+        }
+      } else {
+        // 正常稼働中はタイマーを止め、手動 deactivate/cleanup を尊重する。
+        if (auto_start_timer_) {
+          auto_start_timer_->cancel();
+        }
+      }
+    } else if (state_id == lifecycle_msgs::msg::State::PRIMARY_STATE_FINALIZED) {
+      if (auto_start_timer_) {
+        auto_start_timer_->cancel();
+      }
+    }
+  } catch (const std::exception& error) {
+    const uint8_t current_state = this->get_current_state().id();
+    if (current_state == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
+      runtime_fault_.store(true);
+      if (auto_start_timer_) {
+        auto_start_timer_->reset();
+      }
+    } else if (current_state == lifecycle_msgs::msg::State::PRIMARY_STATE_FINALIZED &&
+               auto_start_timer_) {
       auto_start_timer_->cancel();
     }
+    RCLCPP_ERROR(this->get_logger(), "Lifecycle auto-start transition threw (state=%u): %s",
+                 static_cast<unsigned int>(current_state), error.what());
+  } catch (...) {
+    const uint8_t current_state = this->get_current_state().id();
+    if (current_state == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
+      runtime_fault_.store(true);
+      if (auto_start_timer_) {
+        auto_start_timer_->reset();
+      }
+    } else if (current_state == lifecycle_msgs::msg::State::PRIMARY_STATE_FINALIZED &&
+               auto_start_timer_) {
+      auto_start_timer_->cancel();
+    }
+    RCLCPP_ERROR(this->get_logger(),
+                 "Lifecycle auto-start transition threw an unknown exception (state=%u)",
+                 static_cast<unsigned int>(current_state));
   }
 }
 
@@ -231,6 +304,9 @@ ShotComponent::CallbackReturn ShotComponent::on_cleanup(const rclcpp_lifecycle::
 }
 
 ShotComponent::CallbackReturn ShotComponent::on_shutdown(const rclcpp_lifecycle::State&) {
+  if (auto_start_timer_) {
+    auto_start_timer_->cancel();
+  }
   joy_subscription_.reset();
   disconnectServo();
   RCLCPP_INFO(this->get_logger(), "Shot component shut down");
