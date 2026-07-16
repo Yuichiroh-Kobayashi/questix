@@ -6,6 +6,7 @@
 #ifndef MOTOR_CONTROL_APP__SHOT_COMPONENT_HPP_
 #define MOTOR_CONTROL_APP__SHOT_COMPONENT_HPP_
 
+#include <atomic>
 #include <chrono>
 #include <memory>
 #include <rclcpp/rclcpp.hpp>
@@ -42,6 +43,7 @@ private:
   void joyCallback(const sensor_msgs::msg::Joy::SharedPtr msg);
   void executeShotSequence();
   void autoStartTimerCallback();
+  void triggerAutoRecovery();
   void disconnectServo();
 
   // 角度変換関数
@@ -67,6 +69,9 @@ private:
   int command_rate_limit_ms_;
   bool auto_start_;
   double connect_retry_period_sec_;
+  // ACTIVE 中に検出したサーボ通信故障のフラグ。autoStartTimerCallback が拾って
+  // deactivate→cleanup→再接続の自動復帰を行う。
+  std::atomic<bool> runtime_fault_;
 
   bool is_shooting_;
   bool last_button_state_;

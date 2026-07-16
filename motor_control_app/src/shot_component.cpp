@@ -31,6 +31,7 @@ ShotComponent::ShotComponent(const rclcpp::NodeOptions& options)
       command_rate_limit_ms_(50),
       auto_start_(true),
       connect_retry_period_sec_(3.0),
+      runtime_fault_(false),
       is_shooting_(false),
       last_button_state_(false),
       last_tilt_value_(0.0F),
@@ -83,7 +84,12 @@ ShotComponent::ShotComponent(const rclcpp::NodeOptions& options)
   }
 }
 
-ShotComponent::~ShotComponent() { disconnectServo(); }
+ShotComponent::~ShotComponent() {
+  if (auto_start_timer_) {
+    auto_start_timer_->cancel();
+  }
+  disconnectServo();
+}
 
 void ShotComponent::autoStartTimerCallback() {
   const uint8_t state_id = this->get_current_state().id();
@@ -93,8 +99,19 @@ void ShotComponent::autoStartTimerCallback() {
     this->configure();
   } else if (state_id == lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE) {
     this->activate();
+  } else if (state_id == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
+    if (runtime_fault_.exchange(false)) {
+      // ACTIVE 中に検出したサーボ通信故障からの自動復帰。一旦 deactivate→cleanup
+      // で解体し、次周期以降の configure→activate で接続とサーボ応答を確認し直す。
+      RCLCPP_WARN(this->get_logger(),
+                  "サーボ通信故障を検出。deactivate→cleanup して再接続を試みます");
+      this->deactivate();
+      this->cleanup();
+    } else {
+      // 正常稼働中はタイマーを止め、手動 deactivate/cleanup を尊重する。
+      auto_start_timer_->cancel();
+    }
   }
-  // ACTIVE の間は何もしない。エラーで unconfigured に戻れば次周期で再試行する。
 }
 
 ShotComponent::CallbackReturn ShotComponent::on_configure(const rclcpp_lifecycle::State&) {
@@ -183,6 +200,10 @@ ShotComponent::CallbackReturn ShotComponent::on_activate(const rclcpp_lifecycle:
   RCLCPP_INFO(this->get_logger(),
               "Fire angle: %.1f deg, Home angle: %.1f deg, Current tilt: %.1f deg", fire_angle_,
               home_angle_, current_tilt_angle_);
+  // 稼働状態に到達。以降は自動再遷移を止めて手動 deactivate/cleanup を尊重する。
+  if (auto_start_timer_) {
+    auto_start_timer_->cancel();
+  }
   return CallbackReturn::SUCCESS;
 }
 
@@ -206,12 +227,34 @@ ShotComponent::CallbackReturn ShotComponent::on_shutdown(const rclcpp_lifecycle:
 }
 
 ShotComponent::CallbackReturn ShotComponent::on_error(const rclcpp_lifecycle::State&) {
-  // 遷移中の失敗（activate 時のホーム移動失敗など）はリソースを解放して
-  // unconfigured に戻し、auto_start タイマーの再試行に委ねる。
+  // 遷移中に ERROR / 例外が発生したときの後始末。リソースを解放して unconfigured
+  // に戻し、auto_start 有効時はタイマーを再開して自動復帰に委ねる。
   joy_subscription_.reset();
   disconnectServo();
+  runtime_fault_ = false;
+  if (auto_start_ && auto_start_timer_) {
+    auto_start_timer_->reset();
+  }
   RCLCPP_WARN(this->get_logger(), "Shot component error handled, returning to unconfigured");
   return CallbackReturn::SUCCESS;
+}
+
+void ShotComponent::triggerAutoRecovery() {
+  // ACTIVE 中にサーボ通信が失敗したときの復帰トリガ。実際の lifecycle 遷移は
+  // autoStartTimerCallback 側で行い、サブスクリプション/射撃処理内からの
+  // 再帰的な状態遷移を避ける。
+  if (!auto_start_) {
+    return;  // 手動運用時は operator の lifecycle 制御に委ねる
+  }
+  if (this->get_current_state().id() != lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
+    return;
+  }
+  if (!runtime_fault_.exchange(true)) {
+    RCLCPP_WARN(this->get_logger(), "サーボ通信エラーを検出。自動復帰シーケンスを開始します");
+  }
+  if (auto_start_timer_) {
+    auto_start_timer_->reset();
+  }
 }
 
 void ShotComponent::disconnectServo() {
@@ -264,6 +307,7 @@ void ShotComponent::joyCallback(const sensor_msgs::msg::Joy::SharedPtr msg) {
       last_command_time_ = this->now();
     } else {
       RCLCPP_ERROR(this->get_logger(), "Failed to move tilt %s", direction);
+      triggerAutoRecovery();
     }
   };
 
@@ -317,9 +361,11 @@ void ShotComponent::executeShotSequence() {
       RCLCPP_INFO(this->get_logger(), "Returned to home position (%.1f deg)", home_angle_);
     } else {
       RCLCPP_ERROR(this->get_logger(), "Failed to return to home position");
+      triggerAutoRecovery();
     }
   } else {
     RCLCPP_ERROR(this->get_logger(), "Failed to move to fire position");
+    triggerAutoRecovery();
   }
 
   is_shooting_ = false;
