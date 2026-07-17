@@ -20,7 +20,8 @@ int main(int argc, char* argv[]) {
   RCLCPP_INFO(drive_node->get_logger(), "Starting Drive Component Node");
 
   try {
-    rclcpp::spin(drive_node);
+    // LifecycleNode は Node を継承しないため base interface 経由で spin する
+    rclcpp::spin(drive_node->get_node_base_interface());
   } catch (const std::exception& e) {
     RCLCPP_ERROR(drive_node->get_logger(), "Exception during execution: %s", e.what());
   }

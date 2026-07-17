@@ -7,6 +7,13 @@ drive_component:
     serial_port: "/dev/ttyACM0"
     baud_rate: 57600
 
+    # Lifecycle auto start / ライフサイクル自動起動
+    # 非常停止中はモータが通電されず接続できないため、unconfigured で待機し
+    # connect_retry_period_sec 間隔で接続を再試行、成功したら自動で activate する。
+    # false にすると ros2 lifecycle set で手動遷移する運用になる。
+    auto_start: true
+    connect_retry_period_sec: 1.0
+
     # ロボット物理パラメータ
     wheel_radius: 0.1 # ホイール半径 [m]
     wheel_separation: 0.5 # ホイール間隔 [m]
