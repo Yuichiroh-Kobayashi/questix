@@ -42,6 +42,8 @@ public:
 private:
   void joyCallback(const sensor_msgs::msg::Joy::SharedPtr msg);
   void executeShotSequence();
+  void fireTimerCallback();
+  void cancelShotSequence();
   void autoStartTimerCallback();
   void triggerAutoRecovery();
   void disconnectServo();
@@ -84,6 +86,9 @@ private:
 
   rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_subscription_;
   rclcpp::TimerBase::SharedPtr auto_start_timer_;
+  // 射撃シーケンス用ワンショットタイマー。fire 位置到達後 fire_duration_ms で
+  // 発火し home 復帰する。executor をブロックしないための置き換え（issue #83）。
+  rclcpp::TimerBase::SharedPtr fire_timer_;
 };
 
 }  // namespace motor_control_app
