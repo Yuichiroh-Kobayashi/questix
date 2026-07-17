@@ -8,6 +8,8 @@
 #include <sys/select.h>
 
 #include <algorithm>
+#include <cerrno>
+#include <cstring>
 #include <thread>
 
 #include "motor_control_lib/ddt_protocol.hpp"
@@ -504,7 +506,9 @@ bool DdtMotorLib::sendFrameWithFeedback(int motor_id, const std::vector<uint8_t>
       std::this_thread::sleep_for(5ms);
       continue;
     }
-    fsync(serial_fd_);
+    if (!drainSerialOutput()) {
+      return false;
+    }
 
     std::vector<uint8_t> feedback_frame;
     if (readFeedbackFrame(motor_id, feedback_frame, /*timeout_ms=*/10)) {
@@ -663,7 +667,10 @@ bool DdtMotorLib::sendCommand(const std::vector<uint8_t>& command, int retry_cou
     try {
       ssize_t written = writeSerial(command.data(), command.size());
       if (written == static_cast<ssize_t>(command.size())) {
-        fsync(serial_fd_);
+        // 書込済みcommandの重複送信を避けるため、drain失敗時は再試行しない。
+        if (!drainSerialOutput()) {
+          return false;
+        }
         std::this_thread::sleep_for(50ms);
         return true;
       }
@@ -673,6 +680,27 @@ bool DdtMotorLib::sendCommand(const std::vector<uint8_t>& command, int retry_cou
     }
   }
   return false;
+}
+
+bool DdtMotorLib::drainSerialOutput() {
+  if (serial_fd_ < 0) {
+    return false;
+  }
+
+  int result;
+  do {
+    result = tcdrain(serial_fd_);
+  } while (result == -1 && errno == EINTR);
+
+  if (result != 0) {
+    const int saved_errno = errno;
+    RCLCPP_WARN_THROTTLE(logger_, *rclcpp::Clock::make_shared(), 1000,
+                         "シリアル送信完了待機に失敗: errno=%d (%s)", saved_errno,
+                         std::strerror(saved_errno));
+    return false;
+  }
+
+  return true;
 }
 
 ssize_t DdtMotorLib::writeSerial(const void* data, size_t size) {
