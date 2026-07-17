@@ -15,18 +15,28 @@
 #include "motor_control_lib/differential_drive.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_components/register_node_macro.hpp"
+#include "rclcpp_lifecycle/lifecycle_node.hpp"
+#include "rclcpp_lifecycle/lifecycle_publisher.hpp"
 #include "std_msgs/msg/string.hpp"
 
 namespace motor_control_app {
 
 /**
- * @brief DDTモータを使用したドライブコンポーネント
+ * @brief DDTモータを使用したドライブコンポーネント（Lifecycle ノード）
  *
  * geometry_msgs/Twistメッセージを受信してDDTモータを制御します。
- * ROS 2のコンポーネントシステムを使用して実装されています。
+ *
+ * 非常停止中はモータが通電されず、シリアル接続（/dev/ttyACM0 の USB CDC）が
+ * 得られない。そのため起動時は unconfigured で待機し、通電後に
+ * configure（シリアル接続 + モータ初期化）→ activate（twist 受付開始）で
+ * 運用状態に遷移する。auto_start=true（既定）の場合、内蔵タイマーが
+ * configure/activate を成功するまで再試行するので、外部の lifecycle manager
+ * なしで systemd 起動に耐える（shot_component と同パターン）。
  */
-class DriveComponent : public rclcpp::Node {
+class DriveComponent : public rclcpp_lifecycle::LifecycleNode {
 public:
+  using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn;
+
   /**
    * @brief コンストラクタ
    * @param options ノードオプション
@@ -36,7 +46,14 @@ public:
   /**
    * @brief デストラクタ
    */
-  virtual ~DriveComponent();
+  ~DriveComponent() override;
+
+  CallbackReturn on_configure(const rclcpp_lifecycle::State& state) override;
+  CallbackReturn on_activate(const rclcpp_lifecycle::State& state) override;
+  CallbackReturn on_deactivate(const rclcpp_lifecycle::State& state) override;
+  CallbackReturn on_cleanup(const rclcpp_lifecycle::State& state) override;
+  CallbackReturn on_shutdown(const rclcpp_lifecycle::State& state) override;
+  CallbackReturn on_error(const rclcpp_lifecycle::State& state) override;
 
 private:
   /**
@@ -58,9 +75,22 @@ private:
   void watchdogTimerCallback();
 
   /**
-   * @brief パラメータを初期化
+   * @brief auto_start タイマーコールバック
+   *
+   * unconfigured なら configure、inactive なら activate を試行し、
+   * active に到達したらタイマーを止める（手動 deactivate を自動で覆さない）。
    */
-  void initializeParameters();
+  void autoStartTimerCallback();
+
+  /**
+   * @brief パラメータを宣言（コンストラクタで一度だけ呼ぶ）
+   */
+  void declareParameters();
+
+  /**
+   * @brief パラメータを取得（on_configure で呼び、cleanup→configure で再読込可能にする）
+   */
+  void readParameters();
 
   /**
    * @brief DDTモータライブラリを初期化
@@ -68,11 +98,22 @@ private:
    */
   bool initializeMotorLib();
 
+  /**
+   * @brief モータライブラリを安全に停止・解放（何度呼んでも安全）
+   */
+  void shutdownMotorLib();
+
+  /**
+   * @brief スルーレート制限用のコマンド状態をリセット
+   */
+  void resetCommandState();
+
   // ROS 2 通信
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr twist_subscription_;
-  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_publisher_;
+  rclcpp_lifecycle::LifecyclePublisher<std_msgs::msg::String>::SharedPtr status_publisher_;
   rclcpp::TimerBase::SharedPtr status_timer_;
   rclcpp::TimerBase::SharedPtr watchdog_timer_;
+  rclcpp::TimerBase::SharedPtr auto_start_timer_;
 
   // モータ制御ライブラリ
   std::shared_ptr<motor_control_lib::DdtMotorLib> motor_lib_;
@@ -115,6 +156,10 @@ private:
 
   // 指令送信後の追加待機 [ms]。0で無効（DDT M0602C の間隔要件用の保険）
   int command_wait_ms_{0};
+
+  // Lifecycle 自動起動（モータ通電まで configure を再試行する）
+  bool auto_start_{true};
+  double connect_retry_period_sec_{1.0};
 
   // 状態フラグ
   bool motor_initialized_;
