@@ -697,9 +697,8 @@ bool DdtMotorLib::drainSerialOutput() {
 
   if (result != 0) {
     static rclcpp::Clock steady_clock(RCL_STEADY_TIME);
-    RCLCPP_WARN_THROTTLE(logger_, steady_clock, 1000,
-                         "シリアル送信完了待機に失敗: errno=%d (%s)", saved_errno,
-                         std::strerror(saved_errno));
+    RCLCPP_WARN_THROTTLE(logger_, steady_clock, 1000, "シリアル送信完了待機に失敗: errno=%d (%s)",
+                         saved_errno, std::strerror(saved_errno));
     return false;
   }
 
