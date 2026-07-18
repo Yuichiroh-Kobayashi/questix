@@ -21,6 +21,7 @@ using motor_control_app::shot_auto_start::isValidFireDurationMs;
 using motor_control_app::shot_auto_start::normalizeControllableTimeout;
 using motor_control_app::shot_auto_start::normalizePositivePeriod;
 using motor_control_app::shot_auto_start::SafetyTeardownAction;
+using motor_control_app::shot_auto_start::shouldHoldManualLifecycle;
 using motor_control_app::shot_auto_start::shouldLogControllableRecovery;
 
 // /gpio/controllable 未受信（enable_gpio_ref=false 等）は周期リトライにフォールバック
@@ -104,13 +105,22 @@ TEST(ShotControllableTimeout, FreshOrRecoveredSignalIsNotStale) {
   EXPECT_FALSE(decideControllableTimeout(1.0, true, true, 0.1).fail_safe);
 }
 
-TEST(ShotSafetyTeardown, ActiveFailureRearmsRetry) {
+TEST(ShotSafetyTeardown, StableStatesSelectSafeRetryAction) {
   EXPECT_EQ(decideSafetyTeardownAction(State::PRIMARY_STATE_ACTIVE),
-            SafetyTeardownAction::kRearmActive);
+            SafetyTeardownAction::kRetryDeactivate);
+  EXPECT_EQ(decideSafetyTeardownAction(State::PRIMARY_STATE_INACTIVE),
+            SafetyTeardownAction::kRetryCleanup);
   EXPECT_EQ(decideSafetyTeardownAction(State::PRIMARY_STATE_UNCONFIGURED),
             SafetyTeardownAction::kResetRetry);
   EXPECT_EQ(decideSafetyTeardownAction(State::PRIMARY_STATE_FINALIZED),
             SafetyTeardownAction::kStopTimers);
+}
+
+TEST(ShotSafetyTeardown, CanceledTimerHoldsManualPreActiveStates) {
+  EXPECT_TRUE(shouldHoldManualLifecycle(State::PRIMARY_STATE_INACTIVE, true));
+  EXPECT_TRUE(shouldHoldManualLifecycle(State::PRIMARY_STATE_UNCONFIGURED, true));
+  EXPECT_FALSE(shouldHoldManualLifecycle(State::PRIMARY_STATE_ACTIVE, true));
+  EXPECT_FALSE(shouldHoldManualLifecycle(State::PRIMARY_STATE_UNCONFIGURED, false));
 }
 
 TEST(ShotParameters, InvalidRetryPeriodFallsBackToDefault) {
