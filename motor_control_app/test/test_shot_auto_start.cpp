@@ -17,6 +17,7 @@ using motor_control_app::shot_auto_start::AutoStartAction;
 using motor_control_app::shot_auto_start::decideAutoStartAction;
 using motor_control_app::shot_auto_start::decideControllableTimeout;
 using motor_control_app::shot_auto_start::decideSafetyTeardownAction;
+using motor_control_app::shot_auto_start::isValidFireDurationMs;
 using motor_control_app::shot_auto_start::normalizeControllableTimeout;
 using motor_control_app::shot_auto_start::normalizePositivePeriod;
 using motor_control_app::shot_auto_start::SafetyTeardownAction;
@@ -126,6 +127,12 @@ TEST(ShotParameters, NonFiniteControllableTimeoutFallsBackToDefault) {
   EXPECT_DOUBLE_EQ(normalizeControllableTimeout(std::numeric_limits<double>::quiet_NaN(), 1.0),
                    1.0);
   EXPECT_DOUBLE_EQ(normalizeControllableTimeout(std::numeric_limits<double>::infinity(), 1.0), 1.0);
+}
+
+TEST(ShotParameters, FireDurationMustBeNonNegative) {
+  EXPECT_FALSE(isValidFireDurationMs(-1));
+  EXPECT_TRUE(isValidFireDurationMs(0));
+  EXPECT_TRUE(isValidFireDurationMs(300));
 }
 
 }  // namespace

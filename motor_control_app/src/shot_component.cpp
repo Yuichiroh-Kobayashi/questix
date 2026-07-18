@@ -374,7 +374,13 @@ ShotComponent::CallbackReturn ShotComponent::on_configure(const rclcpp_lifecycle
   tilt_max_angle_ = this->get_parameter("tilt_max_angle").as_double();
   fire_angle_ = this->get_parameter("fire_angle").as_double();
   home_angle_ = this->get_parameter("home_angle").as_double();
-  fire_duration_ms_ = this->get_parameter("fire_duration_ms").as_int();
+  const int64_t requested_fire_duration_ms = this->get_parameter("fire_duration_ms").as_int();
+  if (!shot_auto_start::isValidFireDurationMs(requested_fire_duration_ms)) {
+    RCLCPP_ERROR(this->get_logger(), "Invalid fire_duration_ms=%lld; value must be non-negative",
+                 static_cast<long long>(requested_fire_duration_ms));
+    return CallbackReturn::FAILURE;
+  }
+  fire_duration_ms_ = requested_fire_duration_ms;
   command_rate_limit_ms_ = this->get_parameter("command_rate_limit_ms").as_int();
   std::string joy_topic = this->get_parameter("joy_topic").as_string();
 
@@ -621,8 +627,27 @@ void ShotComponent::executeShotSequence() {
   RCLCPP_INFO(this->get_logger(), "Moved to fire position (%.1f deg)", fire_angle_);
 
   is_shooting_ = true;
-  fire_timer_ = this->create_wall_timer(std::chrono::milliseconds(fire_duration_ms_),
-                                        std::bind(&ShotComponent::fireTimerCallback, this));
+  try {
+    fire_timer_ = this->create_wall_timer(std::chrono::milliseconds(fire_duration_ms_),
+                                          std::bind(&ShotComponent::fireTimerCallback, this));
+  } catch (const std::exception& error) {
+    RCLCPP_ERROR(this->get_logger(), "Failed to create shot fire timer: %s", error.what());
+    recoverFromShotTimerCreationFailure();
+  } catch (...) {
+    RCLCPP_ERROR(this->get_logger(), "Failed to create shot fire timer: unknown exception");
+    recoverFromShotTimerCreationFailure();
+  }
+}
+
+void ShotComponent::recoverFromShotTimerCreationFailure() noexcept {
+  cancelShotSequence();
+  try {
+    triggerAutoRecovery();
+  } catch (const std::exception& error) {
+    RCLCPP_ERROR(this->get_logger(), "Shot timer recovery trigger failed: %s", error.what());
+  } catch (...) {
+    RCLCPP_ERROR(this->get_logger(), "Shot timer recovery trigger failed with unknown exception");
+  }
 }
 
 void ShotComponent::fireTimerCallback() {

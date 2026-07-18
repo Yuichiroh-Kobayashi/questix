@@ -51,6 +51,7 @@ private:
   void joyCallback(const sensor_msgs::msg::Joy::SharedPtr msg);
   void executeShotSequence();
   void fireTimerCallback();
+  void recoverFromShotTimerCreationFailure() noexcept;
   void cancelShotSequence() noexcept;
   void autoStartTimerCallback();
   void controllableCallback(const std_msgs::msg::Bool::SharedPtr msg);
@@ -81,7 +82,7 @@ private:
   double tilt_max_angle_;
   double fire_angle_;
   double home_angle_;
-  int fire_duration_ms_;
+  int64_t fire_duration_ms_;
   int command_rate_limit_ms_;
   bool auto_start_;
   double connect_retry_period_sec_;
