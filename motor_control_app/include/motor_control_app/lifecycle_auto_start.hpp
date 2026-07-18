@@ -18,7 +18,8 @@ enum class AutoStartAction { kConfigure, kActivate, kStopTimer, kNone };
 // unconfigured -> kConfigure（接続を試行）
 // inactive     -> kActivate（運用状態へ遷移）
 // active       -> kStopTimer（正常稼働中。手動 deactivate/cleanup を尊重して停止）
-// それ以外（finalized・遷移中など）-> kNone（何もしない）
+// finalized    -> kStopTimer（終了後にタイマーを残さない）
+// transition/unknown -> kNone（何もしない）
 inline AutoStartAction decideAutoStartAction(uint8_t state_id) {
   switch (state_id) {
     case lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED:
@@ -26,9 +27,24 @@ inline AutoStartAction decideAutoStartAction(uint8_t state_id) {
     case lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE:
       return AutoStartAction::kActivate;
     case lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE:
+    case lifecycle_msgs::msg::State::PRIMARY_STATE_FINALIZED:
       return AutoStartAction::kStopTimer;
     default:
       return AutoStartAction::kNone;
+  }
+}
+
+inline bool isTransitionState(uint8_t state_id) {
+  switch (state_id) {
+    case lifecycle_msgs::msg::State::TRANSITION_STATE_CONFIGURING:
+    case lifecycle_msgs::msg::State::TRANSITION_STATE_CLEANINGUP:
+    case lifecycle_msgs::msg::State::TRANSITION_STATE_SHUTTINGDOWN:
+    case lifecycle_msgs::msg::State::TRANSITION_STATE_ACTIVATING:
+    case lifecycle_msgs::msg::State::TRANSITION_STATE_DEACTIVATING:
+    case lifecycle_msgs::msg::State::TRANSITION_STATE_ERRORPROCESSING:
+      return true;
+    default:
+      return false;
   }
 }
 

@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <exception>
 #include <filesystem>
 #include <functional>
 #include <lifecycle_msgs/msg/state.hpp>
@@ -65,20 +66,34 @@ void DriveComponent::autoStartTimerCallback() {
   using lifecycle_auto_start::AutoStartAction;
   using lifecycle_auto_start::decideAutoStartAction;
 
-  AutoStartAction action = decideAutoStartAction(this->get_current_state().id());
-  if (action == AutoStartAction::kConfigure) {
-    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 30000,
-                         "モータ接続を試行します（未通電時は失敗し、通電後に自動復帰します）");
-    this->configure();
-    // 通電済みの通常起動で従来同等のタイミングで走行可能にするため、
-    // configure 成功時は同一ティックで activate まで進める。
-    action = decideAutoStartAction(this->get_current_state().id());
+  if (!auto_start_timer_) {
+    return;
   }
-  if (action == AutoStartAction::kActivate) {
-    this->activate();
-  } else if (action == AutoStartAction::kStopTimer) {
-    // 正常稼働中はタイマーを止め、手動 deactivate/cleanup を尊重する。
-    auto_start_timer_->cancel();
+  try {
+    uint8_t state_id = this->get_current_state().id();
+    AutoStartAction action = decideAutoStartAction(state_id);
+    if (action == AutoStartAction::kConfigure) {
+      RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 30000,
+                           "モータ接続を試行します（未通電時は失敗し、通電後に自動復帰します）");
+      state_id = this->configure().id();
+      action = decideAutoStartAction(state_id);
+    }
+    if (action == AutoStartAction::kActivate) {
+      state_id = this->activate().id();
+      action = decideAutoStartAction(state_id);
+    }
+    if (action == AutoStartAction::kStopTimer) {
+      auto_start_timer_->cancel();
+    } else if (action == AutoStartAction::kNone &&
+               !lifecycle_auto_start::isTransitionState(state_id)) {
+      RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 30000,
+                           "Unexpected lifecycle state during drive auto-start: %u",
+                           static_cast<unsigned int>(state_id));
+    }
+  } catch (const std::exception& error) {
+    RCLCPP_ERROR(this->get_logger(), "Drive auto-start transition failed: %s", error.what());
+  } catch (...) {
+    RCLCPP_ERROR(this->get_logger(), "Drive auto-start transition failed with unknown exception");
   }
 }
 
@@ -202,6 +217,9 @@ DriveComponent::CallbackReturn DriveComponent::on_cleanup(const rclcpp_lifecycle
 }
 
 DriveComponent::CallbackReturn DriveComponent::on_shutdown(const rclcpp_lifecycle::State&) {
+  if (auto_start_timer_) {
+    auto_start_timer_->cancel();
+  }
   status_timer_.reset();
   watchdog_timer_.reset();
   twist_subscription_.reset();

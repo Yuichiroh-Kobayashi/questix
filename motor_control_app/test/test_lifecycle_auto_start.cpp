@@ -29,8 +29,8 @@ TEST(LifecycleAutoStart, ActiveStopsTimer) {
   EXPECT_EQ(decideAutoStartAction(State::PRIMARY_STATE_ACTIVE), AutoStartAction::kStopTimer);
 }
 
-TEST(LifecycleAutoStart, FinalizedDoesNothing) {
-  EXPECT_EQ(decideAutoStartAction(State::PRIMARY_STATE_FINALIZED), AutoStartAction::kNone);
+TEST(LifecycleAutoStart, FinalizedStopsTimer) {
+  EXPECT_EQ(decideAutoStartAction(State::PRIMARY_STATE_FINALIZED), AutoStartAction::kStopTimer);
 }
 
 TEST(LifecycleAutoStart, TransitionStatesDoNothing) {
@@ -56,6 +56,10 @@ TEST(LifecycleAutoStart, UnpoweredStartupRetriesConfigure) {
   // 未通電起動: configure 失敗で unconfigured に戻り、次ティックも kConfigure。
   EXPECT_EQ(decideAutoStartAction(State::PRIMARY_STATE_UNCONFIGURED), AutoStartAction::kConfigure);
   EXPECT_EQ(decideAutoStartAction(State::PRIMARY_STATE_UNCONFIGURED), AutoStartAction::kConfigure);
+}
+
+TEST(LifecycleAutoStart, UnexpectedStateDoesNothing) {
+  EXPECT_EQ(decideAutoStartAction(State::PRIMARY_STATE_UNKNOWN), AutoStartAction::kNone);
 }
 
 }  // namespace
