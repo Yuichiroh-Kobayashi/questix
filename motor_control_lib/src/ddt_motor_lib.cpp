@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <cstring>
+#include <rclcpp/clock.hpp>
 #include <thread>
 
 #include "motor_control_lib/ddt_protocol.hpp"
@@ -688,13 +689,15 @@ bool DdtMotorLib::drainSerialOutput() {
   }
 
   int result;
+  int saved_errno = 0;
   do {
     result = tcdrain(serial_fd_);
-  } while (result == -1 && errno == EINTR);
+    saved_errno = result == -1 ? errno : 0;
+  } while (result == -1 && saved_errno == EINTR);
 
   if (result != 0) {
-    const int saved_errno = errno;
-    RCLCPP_WARN_THROTTLE(logger_, *rclcpp::Clock::make_shared(), 1000,
+    static rclcpp::Clock steady_clock(RCL_STEADY_TIME);
+    RCLCPP_WARN_THROTTLE(logger_, steady_clock, 1000,
                          "シリアル送信完了待機に失敗: errno=%d (%s)", saved_errno,
                          std::strerror(saved_errno));
     return false;
