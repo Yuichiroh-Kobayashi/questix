@@ -312,6 +312,12 @@ void ShotComponent::controllableTimeoutCallback() {
     return;
   }
   controllable_ = false;
+  // ACTIVEでは通常運転到達時にtimerがcancel済みでもfail-safe teardownする。
+  // INACTIVEかつcancel済みはmanual deactivateなのでcleanup/retryで覆さない。
+  if (this->get_current_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE &&
+      (!auto_start_timer_ || auto_start_timer_->is_canceled())) {
+    return;
+  }
   RCLCPP_WARN(this->get_logger(), "%s reception timed out after %.2fs; applying fail-safe teardown",
               controllable_topic_.c_str(), elapsed);
   try {
