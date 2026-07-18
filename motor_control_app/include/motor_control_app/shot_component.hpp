@@ -54,7 +54,8 @@ private:
   void controllableCallback(const std_msgs::msg::Bool::SharedPtr msg);
   void controllableTimeoutCallback();
   void tryAutoStart();
-  void transitionToUnconfiguredForAutoRecovery(const char* reason, bool retry_active_failure);
+  void transitionToUnconfiguredForAutoRecovery(const char* reason) noexcept;
+  void handleSafetyTeardownState(const char* reason, uint8_t state_id) noexcept;
   void stopAutoStartTimers();
   void triggerAutoRecovery();
   void disconnectServo();

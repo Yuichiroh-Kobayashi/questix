@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <exception>
 #include <functional>
 #include <lifecycle_msgs/msg/state.hpp>
@@ -78,9 +79,23 @@ ShotComponent::ShotComponent(const rclcpp::NodeOptions& options)
   this->declare_parameter("controllable_timeout_sec", 1.0);
 
   auto_start_ = this->get_parameter("auto_start").as_bool();
-  connect_retry_period_sec_ = this->get_parameter("connect_retry_period_sec").as_double();
+  const double requested_retry_period = this->get_parameter("connect_retry_period_sec").as_double();
+  connect_retry_period_sec_ = shot_auto_start::normalizePositivePeriod(requested_retry_period, 3.0);
+  if (!shot_auto_start::isValidPositivePeriod(requested_retry_period)) {
+    RCLCPP_WARN(this->get_logger(),
+                "Invalid connect_retry_period_sec=%g; using the default 3.0 seconds",
+                requested_retry_period);
+  }
   controllable_topic_ = this->get_parameter("controllable_topic").as_string();
-  controllable_timeout_sec_ = this->get_parameter("controllable_timeout_sec").as_double();
+  const double requested_controllable_timeout =
+      this->get_parameter("controllable_timeout_sec").as_double();
+  controllable_timeout_sec_ =
+      shot_auto_start::normalizeControllableTimeout(requested_controllable_timeout, 1.0);
+  if (!std::isfinite(requested_controllable_timeout)) {
+    RCLCPP_WARN(this->get_logger(),
+                "Invalid controllable_timeout_sec=%g; using the default 1.0 seconds",
+                requested_controllable_timeout);
+  }
 
   if (auto_start_) {
     const auto period = std::chrono::duration<double>(std::max(0.5, connect_retry_period_sec_));
@@ -125,7 +140,7 @@ void ShotComponent::autoStartTimerCallback() {
         runtime_fault_.exchange(false)) {
       RCLCPP_WARN(this->get_logger(),
                   "サーボ通信故障を検出。deactivate→cleanup して再接続を試みます");
-      transitionToUnconfiguredForAutoRecovery("runtime fault", true);
+      transitionToUnconfiguredForAutoRecovery("runtime fault");
       return;
     }
     tryAutoStart();
@@ -184,32 +199,69 @@ void ShotComponent::tryAutoStart() {
   }
 }
 
-void ShotComponent::transitionToUnconfiguredForAutoRecovery(const char* reason,
-                                                            bool retry_active_failure) {
+void ShotComponent::transitionToUnconfiguredForAutoRecovery(const char* reason) noexcept {
   if (!auto_start_timer_) {
     return;
   }
-  uint8_t state_id = this->get_current_state().id();
-  if (state_id == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
-    state_id = this->deactivate().id();
-  }
-  if (state_id == lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE) {
-    state_id = this->cleanup().id();
-  }
-  if (state_id == lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED) {
-    runtime_fault_ = false;
-    auto_start_timer_->reset();
-  } else if (state_id == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
-    if (retry_active_failure) {
-      runtime_fault_ = true;
-      auto_start_timer_->reset();
+  try {
+    uint8_t state_id = this->get_current_state().id();
+    if (state_id == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
+      state_id = this->deactivate().id();
     }
-    RCLCPP_WARN(this->get_logger(), "%s teardown left ShotComponent ACTIVE", reason);
-  } else if (state_id == lifecycle_msgs::msg::State::PRIMARY_STATE_FINALIZED) {
-    stopAutoStartTimers();
-  } else if (!shot_auto_start::isTransitionState(state_id)) {
-    RCLCPP_WARN(this->get_logger(), "%s teardown ended in unexpected state: %u", reason,
-                static_cast<unsigned int>(state_id));
+    if (state_id == lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE) {
+      state_id = this->cleanup().id();
+    }
+    handleSafetyTeardownState(reason, state_id);
+  } catch (const std::exception& error) {
+    RCLCPP_ERROR(this->get_logger(), "%s teardown transition failed: %s", reason, error.what());
+    uint8_t state_id = lifecycle_msgs::msg::State::PRIMARY_STATE_UNKNOWN;
+    try {
+      state_id = this->get_current_state().id();
+    } catch (...) {
+      RCLCPP_ERROR(this->get_logger(), "%s teardown state inspection failed", reason);
+    }
+    handleSafetyTeardownState(reason, state_id);
+  } catch (...) {
+    RCLCPP_ERROR(this->get_logger(), "%s teardown transition failed with unknown exception",
+                 reason);
+    uint8_t state_id = lifecycle_msgs::msg::State::PRIMARY_STATE_UNKNOWN;
+    try {
+      state_id = this->get_current_state().id();
+    } catch (...) {
+      RCLCPP_ERROR(this->get_logger(), "%s teardown state inspection failed", reason);
+    }
+    handleSafetyTeardownState(reason, state_id);
+  }
+}
+
+void ShotComponent::handleSafetyTeardownState(const char* reason, uint8_t state_id) noexcept {
+  using shot_auto_start::SafetyTeardownAction;
+  try {
+    switch (shot_auto_start::decideSafetyTeardownAction(state_id)) {
+      case SafetyTeardownAction::kResetRetry:
+        runtime_fault_ = false;
+        auto_start_timer_->reset();
+        return;
+      case SafetyTeardownAction::kRearmActive:
+        runtime_fault_ = true;
+        auto_start_timer_->reset();
+        RCLCPP_WARN(this->get_logger(), "%s teardown left ShotComponent ACTIVE; retry armed",
+                    reason);
+        return;
+      case SafetyTeardownAction::kStopTimers:
+        stopAutoStartTimers();
+        return;
+      case SafetyTeardownAction::kNone:
+        if (!shot_auto_start::isTransitionState(state_id)) {
+          RCLCPP_WARN(this->get_logger(), "%s teardown ended in unexpected state: %u", reason,
+                      static_cast<unsigned int>(state_id));
+        }
+        return;
+    }
+  } catch (const std::exception& error) {
+    RCLCPP_ERROR(this->get_logger(), "%s teardown follow-up failed: %s", reason, error.what());
+  } catch (...) {
+    RCLCPP_ERROR(this->get_logger(), "%s teardown follow-up failed with unknown exception", reason);
   }
 }
 
@@ -228,7 +280,7 @@ void ShotComponent::controllableCallback(const std_msgs::msg::Bool::SharedPtr ms
   }
   const bool first = !have_controllable_;
   const bool prev = controllable_;
-  const bool recovered = controllable_timed_out_;
+  const bool recovered = shot_auto_start::shouldLogControllableRecovery(controllable_timed_out_);
   have_controllable_ = true;
   controllable_ = msg->data;
   controllable_timed_out_ = false;
@@ -249,25 +301,13 @@ void ShotComponent::controllableCallback(const std_msgs::msg::Bool::SharedPtr ms
       RCLCPP_WARN(this->get_logger(),
                   "非常停止押下を検出（%s=false）。deactivate→cleanup してサーボ接続を解放します",
                   controllable_topic_.c_str());
-      try {
-        transitionToUnconfiguredForAutoRecovery("controllable=false", false);
-      } catch (const std::exception& error) {
-        RCLCPP_ERROR(this->get_logger(), "E-stop teardown failed: %s", error.what());
-      } catch (...) {
-        RCLCPP_ERROR(this->get_logger(), "E-stop teardown failed with unknown exception");
-      }
+      transitionToUnconfiguredForAutoRecovery("controllable=false");
     } else if (state_id == lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE &&
                auto_start_timer_ && !auto_start_timer_->is_canceled()) {
       RCLCPP_WARN(this->get_logger(),
                   "非常停止押下を検出（%s=false）。cleanup してサーボ接続を解放します",
                   controllable_topic_.c_str());
-      try {
-        transitionToUnconfiguredForAutoRecovery("controllable=false", false);
-      } catch (const std::exception& error) {
-        RCLCPP_ERROR(this->get_logger(), "E-stop cleanup failed: %s", error.what());
-      } catch (...) {
-        RCLCPP_ERROR(this->get_logger(), "E-stop cleanup failed with unknown exception");
-      }
+      transitionToUnconfiguredForAutoRecovery("controllable=false");
     }
     return;
   }
@@ -300,15 +340,12 @@ void ShotComponent::controllableTimeoutCallback() {
   const double elapsed =
       std::chrono::duration<double>(std::chrono::steady_clock::now() - last_controllable_time_)
           .count();
-  const bool fail_safe = shot_auto_start::shouldFailSafeControllableTimeout(
+  const auto decision = shot_auto_start::decideControllableTimeout(
       controllable_timeout_sec_, have_controllable_, controllable_, elapsed);
-  if (elapsed <= controllable_timeout_sec_) {
+  if (!decision.fail_safe) {
     return;
   }
-  controllable_timed_out_ = true;
-  if (!fail_safe) {
-    return;
-  }
+  controllable_timed_out_ = decision.latch_timeout;
   controllable_ = false;
   // ACTIVEでは通常運転到達時にtimerがcancel済みでもfail-safe teardownする。
   // INACTIVEかつcancel済みはmanual deactivateなのでcleanup/retryで覆さない。
@@ -318,13 +355,7 @@ void ShotComponent::controllableTimeoutCallback() {
   }
   RCLCPP_WARN(this->get_logger(), "%s reception timed out after %.2fs; applying fail-safe teardown",
               controllable_topic_.c_str(), elapsed);
-  try {
-    transitionToUnconfiguredForAutoRecovery("controllable timeout", false);
-  } catch (const std::exception& error) {
-    RCLCPP_ERROR(this->get_logger(), "Controllable timeout teardown failed: %s", error.what());
-  } catch (...) {
-    RCLCPP_ERROR(this->get_logger(), "Controllable timeout teardown failed with unknown exception");
-  }
+  transitionToUnconfiguredForAutoRecovery("controllable timeout");
 }
 
 ShotComponent::CallbackReturn ShotComponent::on_configure(const rclcpp_lifecycle::State&) {
