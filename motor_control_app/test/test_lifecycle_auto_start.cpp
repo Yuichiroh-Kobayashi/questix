@@ -17,6 +17,7 @@ using motor_control_app::lifecycle_auto_start::AutoStartAction;
 using motor_control_app::lifecycle_auto_start::decideAutoStartAction;
 using motor_control_app::lifecycle_auto_start::isValidStatusPublishRate;
 using motor_control_app::lifecycle_auto_start::normalizeRetryPeriod;
+using motor_control_app::lifecycle_auto_start::statusTimerPeriodNanoseconds;
 
 TEST(LifecycleAutoStart, UnconfiguredTriggersConfigure) {
   EXPECT_EQ(decideAutoStartAction(State::PRIMARY_STATE_UNCONFIGURED), AutoStartAction::kConfigure);
@@ -79,6 +80,14 @@ TEST(LifecycleParameters, StatusPublishRateMustBeFiniteAndPositive) {
   EXPECT_FALSE(isValidStatusPublishRate(-1.0));
   EXPECT_FALSE(isValidStatusPublishRate(std::numeric_limits<double>::quiet_NaN()));
   EXPECT_FALSE(isValidStatusPublishRate(std::numeric_limits<double>::infinity()));
+}
+
+TEST(LifecycleParameters, StatusTimerPeriodMustRemainPositiveAfterConversion) {
+  EXPECT_EQ(statusTimerPeriodNanoseconds(10.0), 100000000);
+  EXPECT_EQ(statusTimerPeriodNanoseconds(1000.0), 1000000);
+  EXPECT_EQ(statusTimerPeriodNanoseconds(1000000000.0), 1);
+  EXPECT_EQ(statusTimerPeriodNanoseconds(2000000000.0), 0);
+  EXPECT_FALSE(isValidStatusPublishRate(2000000000.0));
 }
 
 }  // namespace

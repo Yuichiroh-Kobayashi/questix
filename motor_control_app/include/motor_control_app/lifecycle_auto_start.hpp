@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 #include <lifecycle_msgs/msg/state.hpp>
+#include <limits>
 
 namespace motor_control_app::lifecycle_auto_start {
 
@@ -55,7 +56,22 @@ inline double normalizeRetryPeriod(double value, double fallback) {
   return isValidPositiveValue(value) ? value : fallback;
 }
 
-inline bool isValidStatusPublishRate(double value) { return isValidPositiveValue(value); }
+inline int64_t statusTimerPeriodNanoseconds(double rate_hz) {
+  if (!isValidPositiveValue(rate_hz)) {
+    return 0;
+  }
+  constexpr long double kNanosecondsPerSecond = 1000000000.0L;
+  const long double period_ns = kNanosecondsPerSecond / static_cast<long double>(rate_hz);
+  if (!std::isfinite(period_ns) || period_ns < 1.0L ||
+      period_ns > static_cast<long double>(std::numeric_limits<int64_t>::max())) {
+    return 0;
+  }
+  return static_cast<int64_t>(period_ns);
+}
+
+inline bool isValidStatusPublishRate(double value) {
+  return statusTimerPeriodNanoseconds(value) > 0;
+}
 
 }  // namespace motor_control_app::lifecycle_auto_start
 

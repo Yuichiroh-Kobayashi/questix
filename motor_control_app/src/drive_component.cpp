@@ -109,7 +109,8 @@ DriveComponent::CallbackReturn DriveComponent::on_configure(const rclcpp_lifecyc
 
   if (!lifecycle_auto_start::isValidStatusPublishRate(status_publish_rate_)) {
     RCLCPP_ERROR(this->get_logger(),
-                 "Invalid status_publish_rate=%g; value must be finite and greater than zero",
+                 "Invalid status_publish_rate=%g; value must produce a positive, representable "
+                 "nanosecond timer period",
                  status_publish_rate_);
     return CallbackReturn::FAILURE;
   }
@@ -179,10 +180,10 @@ DriveComponent::CallbackReturn DriveComponent::on_activate(const rclcpp_lifecycl
   resetCommandState();
 
   // ステータスパブリッシュタイマー
-  auto timer_period = std::chrono::duration<double>(1.0 / status_publish_rate_);
+  const auto timer_period = std::chrono::nanoseconds(
+      lifecycle_auto_start::statusTimerPeriodNanoseconds(status_publish_rate_));
   status_timer_ =
-      this->create_wall_timer(std::chrono::duration_cast<std::chrono::milliseconds>(timer_period),
-                              std::bind(&DriveComponent::statusTimerCallback, this));
+      this->create_wall_timer(timer_period, std::bind(&DriveComponent::statusTimerCallback, this));
 
   // コマンド受信ウォッチドッグ（100ms 周期）。cmd_timeout_sec_ <= 0 で無効。
   if (drive_watchdog::isEnabled(cmd_timeout_sec_)) {
