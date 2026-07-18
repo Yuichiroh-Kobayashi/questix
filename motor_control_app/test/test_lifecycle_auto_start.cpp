@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 
 #include <lifecycle_msgs/msg/state.hpp>
+#include <limits>
 
 #include "motor_control_app/lifecycle_auto_start.hpp"
 
@@ -14,6 +15,8 @@ namespace {
 using lifecycle_msgs::msg::State;
 using motor_control_app::lifecycle_auto_start::AutoStartAction;
 using motor_control_app::lifecycle_auto_start::decideAutoStartAction;
+using motor_control_app::lifecycle_auto_start::isValidStatusPublishRate;
+using motor_control_app::lifecycle_auto_start::normalizeRetryPeriod;
 
 TEST(LifecycleAutoStart, UnconfiguredTriggersConfigure) {
   EXPECT_EQ(decideAutoStartAction(State::PRIMARY_STATE_UNCONFIGURED), AutoStartAction::kConfigure);
@@ -60,6 +63,22 @@ TEST(LifecycleAutoStart, UnpoweredStartupRetriesConfigure) {
 
 TEST(LifecycleAutoStart, UnexpectedStateDoesNothing) {
   EXPECT_EQ(decideAutoStartAction(State::PRIMARY_STATE_UNKNOWN), AutoStartAction::kNone);
+}
+
+TEST(LifecycleParameters, InvalidRetryPeriodFallsBackToDefault) {
+  EXPECT_DOUBLE_EQ(normalizeRetryPeriod(2.5, 1.0), 2.5);
+  EXPECT_DOUBLE_EQ(normalizeRetryPeriod(0.0, 1.0), 1.0);
+  EXPECT_DOUBLE_EQ(normalizeRetryPeriod(-1.0, 1.0), 1.0);
+  EXPECT_DOUBLE_EQ(normalizeRetryPeriod(std::numeric_limits<double>::quiet_NaN(), 1.0), 1.0);
+  EXPECT_DOUBLE_EQ(normalizeRetryPeriod(std::numeric_limits<double>::infinity(), 1.0), 1.0);
+}
+
+TEST(LifecycleParameters, StatusPublishRateMustBeFiniteAndPositive) {
+  EXPECT_TRUE(isValidStatusPublishRate(10.0));
+  EXPECT_FALSE(isValidStatusPublishRate(0.0));
+  EXPECT_FALSE(isValidStatusPublishRate(-1.0));
+  EXPECT_FALSE(isValidStatusPublishRate(std::numeric_limits<double>::quiet_NaN()));
+  EXPECT_FALSE(isValidStatusPublishRate(std::numeric_limits<double>::infinity()));
 }
 
 }  // namespace

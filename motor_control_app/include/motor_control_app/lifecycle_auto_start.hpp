@@ -6,6 +6,7 @@
 #ifndef MOTOR_CONTROL_APP__LIFECYCLE_AUTO_START_HPP_
 #define MOTOR_CONTROL_APP__LIFECYCLE_AUTO_START_HPP_
 
+#include <cmath>
 #include <cstdint>
 #include <lifecycle_msgs/msg/state.hpp>
 
@@ -47,6 +48,14 @@ inline bool isTransitionState(uint8_t state_id) {
       return false;
   }
 }
+
+inline bool isValidPositiveValue(double value) { return std::isfinite(value) && value > 0.0; }
+
+inline double normalizeRetryPeriod(double value, double fallback) {
+  return isValidPositiveValue(value) ? value : fallback;
+}
+
+inline bool isValidStatusPublishRate(double value) { return isValidPositiveValue(value); }
 
 }  // namespace motor_control_app::lifecycle_auto_start
 

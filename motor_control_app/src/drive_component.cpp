@@ -31,7 +31,14 @@ DriveComponent::DriveComponent(const rclcpp::NodeOptions& options)
   declareParameters();
 
   auto_start_ = this->get_parameter("auto_start").as_bool();
-  connect_retry_period_sec_ = this->get_parameter("connect_retry_period_sec").as_double();
+  const double requested_retry_period = this->get_parameter("connect_retry_period_sec").as_double();
+  connect_retry_period_sec_ =
+      lifecycle_auto_start::normalizeRetryPeriod(requested_retry_period, 1.0);
+  if (!lifecycle_auto_start::isValidPositiveValue(requested_retry_period)) {
+    RCLCPP_WARN(this->get_logger(),
+                "Invalid connect_retry_period_sec=%g; using the default 1.0 seconds",
+                requested_retry_period);
+  }
 
   if (auto_start_) {
     const auto period = std::chrono::duration<double>(std::max(0.5, connect_retry_period_sec_));
@@ -99,6 +106,13 @@ void DriveComponent::autoStartTimerCallback() {
 
 DriveComponent::CallbackReturn DriveComponent::on_configure(const rclcpp_lifecycle::State&) {
   readParameters();
+
+  if (!lifecycle_auto_start::isValidStatusPublishRate(status_publish_rate_)) {
+    RCLCPP_ERROR(this->get_logger(),
+                 "Invalid status_publish_rate=%g; value must be finite and greater than zero",
+                 status_publish_rate_);
+    return CallbackReturn::FAILURE;
+  }
 
   // 未通電（非常停止中）は USB CDC デバイス自体が存在しない。ライブラリを構築する前に
   // デバイスの有無を確認し、リトライ毎のライブラリ内 ERROR ログで journald を汚さない。
