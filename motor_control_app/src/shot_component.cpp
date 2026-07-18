@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <exception>
 #include <functional>
 #include <lifecycle_msgs/msg/state.hpp>
 #include <string>
@@ -34,9 +35,11 @@ ShotComponent::ShotComponent(const rclcpp::NodeOptions& options)
       command_rate_limit_ms_(50),
       auto_start_(true),
       connect_retry_period_sec_(3.0),
+      controllable_timeout_sec_(1.0),
       controllable_topic_("/gpio/controllable"),
       have_controllable_(false),
       controllable_(false),
+      controllable_timed_out_(false),
       runtime_fault_(false),
       is_shooting_(false),
       last_button_state_(false),
@@ -72,10 +75,12 @@ ShotComponent::ShotComponent(const rclcpp::NodeOptions& options)
   this->declare_parameter("connect_retry_period_sec", 3.0);
   // 非常停止連動トピック（auto_start=true のときのみ有効、空文字で連動無効）
   this->declare_parameter("controllable_topic", "/gpio/controllable");
+  this->declare_parameter("controllable_timeout_sec", 1.0);
 
   auto_start_ = this->get_parameter("auto_start").as_bool();
   connect_retry_period_sec_ = this->get_parameter("connect_retry_period_sec").as_double();
   controllable_topic_ = this->get_parameter("controllable_topic").as_string();
+  controllable_timeout_sec_ = this->get_parameter("controllable_timeout_sec").as_double();
 
   if (auto_start_) {
     const auto period = std::chrono::duration<double>(std::max(0.5, connect_retry_period_sec_));
@@ -86,6 +91,11 @@ ShotComponent::ShotComponent(const rclcpp::NodeOptions& options)
       controllable_sub_ = this->create_subscription<std_msgs::msg::Bool>(
           controllable_topic_, 1,
           std::bind(&ShotComponent::controllableCallback, this, std::placeholders::_1));
+      if (controllable_timeout_sec_ > 0.0) {
+        controllable_timeout_timer_ =
+            this->create_wall_timer(std::chrono::milliseconds(100),
+                                    std::bind(&ShotComponent::controllableTimeoutCallback, this));
+      }
     }
     RCLCPP_INFO(this->get_logger(),
                 "Shot component created (auto_start=true, retry=%.1fs, estop_topic=%s). "
@@ -100,65 +110,132 @@ ShotComponent::ShotComponent(const rclcpp::NodeOptions& options)
 }
 
 ShotComponent::~ShotComponent() {
-  if (auto_start_timer_) {
-    auto_start_timer_->cancel();
+  stopAutoStartTimers();
+  try {
+    disconnectServo();
+  } catch (...) {
+    // Destructors must not propagate hardware cleanup failures.
   }
-  disconnectServo();
 }
 
 void ShotComponent::autoStartTimerCallback() {
-  if (this->get_current_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE &&
-      runtime_fault_.exchange(false)) {
-    // ACTIVE 中に検出したサーボ通信故障からの自動復帰。一旦 deactivate→cleanup
-    // で解体し、次周期以降の configure→activate で接続とサーボ応答を確認し直す。
-    RCLCPP_WARN(this->get_logger(),
-                "サーボ通信故障を検出。deactivate→cleanup して再接続を試みます");
-    this->deactivate();
-    this->cleanup();
-    // on_deactivate がタイマーを止めるため、自動復帰経路のみここで再開する
-    auto_start_timer_->reset();
-    return;
+  try {
+    const uint8_t state_id = this->get_current_state().id();
+    if (state_id == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE &&
+        runtime_fault_.exchange(false)) {
+      RCLCPP_WARN(this->get_logger(),
+                  "サーボ通信故障を検出。deactivate→cleanup して再接続を試みます");
+      transitionToUnconfiguredForAutoRecovery("runtime fault", true);
+      return;
+    }
+    tryAutoStart();
+  } catch (const std::exception& error) {
+    RCLCPP_ERROR(this->get_logger(), "Shot auto-start callback failed: %s", error.what());
+  } catch (...) {
+    RCLCPP_ERROR(this->get_logger(), "Shot auto-start callback failed with unknown exception");
   }
-  tryAutoStart();
 }
 
 void ShotComponent::tryAutoStart() {
   using shot_auto_start::AutoStartAction;
   using shot_auto_start::decideAutoStartAction;
 
-  auto action =
-      decideAutoStartAction(this->get_current_state().id(), have_controllable_, controllable_);
+  if (!auto_start_timer_) {
+    return;
+  }
+  uint8_t state_id = this->get_current_state().id();
+  auto action = decideAutoStartAction(state_id, have_controllable_, controllable_);
   if (action == AutoStartAction::kWaitEstopRelease) {
     RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 30000,
                          "非常停止中のため接続試行を保留しています（解除で自動再開します）");
     return;
   }
   if (action == AutoStartAction::kStopTimer) {
-    // 正常稼働中はタイマーを止め、手動 deactivate/cleanup を尊重する。
-    if (auto_start_timer_) {
-      auto_start_timer_->cancel();
+    auto_start_timer_->cancel();
+    return;
+  }
+  if (action == AutoStartAction::kNone) {
+    if (!shot_auto_start::isTransitionState(state_id)) {
+      RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 30000,
+                           "Unexpected lifecycle state during shot auto-start: %u",
+                           static_cast<unsigned int>(state_id));
     }
     return;
   }
   if (action == AutoStartAction::kConfigure) {
     RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 30000,
                          "サーボ接続を試行します（非常停止中は失敗し、解除後に自動復帰します）");
-    this->configure();
+    state_id = this->configure().id();
     // 接続に成功したら同一周期内で activate まで進める（非常停止解除エッジからの
     // 即時起動と、タイマー経路の起動を同じ動きにする）
-    action =
-        decideAutoStartAction(this->get_current_state().id(), have_controllable_, controllable_);
+    action = decideAutoStartAction(state_id, have_controllable_, controllable_);
   }
   if (action == AutoStartAction::kActivate) {
-    this->activate();
+    state_id = this->activate().id();
+    action = decideAutoStartAction(state_id, have_controllable_, controllable_);
+  }
+  if (action == AutoStartAction::kStopTimer) {
+    auto_start_timer_->cancel();
+  } else if (action == AutoStartAction::kNone && !shot_auto_start::isTransitionState(state_id) &&
+             state_id != lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED) {
+    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 30000,
+                         "Shot auto-start transition ended in unexpected state: %u",
+                         static_cast<unsigned int>(state_id));
+  }
+}
+
+void ShotComponent::transitionToUnconfiguredForAutoRecovery(const char* reason,
+                                                            bool retry_active_failure) {
+  if (!auto_start_timer_) {
+    return;
+  }
+  uint8_t state_id = this->get_current_state().id();
+  if (state_id == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
+    state_id = this->deactivate().id();
+  }
+  if (state_id == lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE) {
+    state_id = this->cleanup().id();
+  }
+  if (state_id == lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED) {
+    runtime_fault_ = false;
+    auto_start_timer_->reset();
+  } else if (state_id == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
+    if (retry_active_failure) {
+      runtime_fault_ = true;
+      auto_start_timer_->reset();
+    }
+    RCLCPP_WARN(this->get_logger(), "%s teardown left ShotComponent ACTIVE", reason);
+  } else if (state_id == lifecycle_msgs::msg::State::PRIMARY_STATE_FINALIZED) {
+    stopAutoStartTimers();
+  } else if (!shot_auto_start::isTransitionState(state_id)) {
+    RCLCPP_WARN(this->get_logger(), "%s teardown ended in unexpected state: %u", reason,
+                static_cast<unsigned int>(state_id));
+  }
+}
+
+void ShotComponent::stopAutoStartTimers() {
+  if (auto_start_timer_) {
+    auto_start_timer_->cancel();
+  }
+  if (controllable_timeout_timer_) {
+    controllable_timeout_timer_->cancel();
   }
 }
 
 void ShotComponent::controllableCallback(const std_msgs::msg::Bool::SharedPtr msg) {
+  if (!msg) {
+    return;
+  }
   const bool first = !have_controllable_;
   const bool prev = controllable_;
+  const bool recovered = controllable_timed_out_;
   have_controllable_ = true;
   controllable_ = msg->data;
+  controllable_timed_out_ = false;
+  last_controllable_time_ = std::chrono::steady_clock::now();
+  if (recovered) {
+    RCLCPP_INFO(this->get_logger(), "%s reception recovered", controllable_topic_.c_str());
+  }
   if (!first && controllable_ == prev) {
     return;  // 値に変化なし（~20Hz で配信されるため、エッジのみ処理する）
   }
@@ -172,17 +249,25 @@ void ShotComponent::controllableCallback(const std_msgs::msg::Bool::SharedPtr ms
       RCLCPP_WARN(this->get_logger(),
                   "非常停止押下を検出（%s=false）。deactivate→cleanup してサーボ接続を解放します",
                   controllable_topic_.c_str());
-      this->deactivate();
-      this->cleanup();
-      runtime_fault_ = false;
-      // on_deactivate がタイマーを止めるため、解除待ちのためここで再開する
-      auto_start_timer_->reset();
+      try {
+        transitionToUnconfiguredForAutoRecovery("controllable=false", false);
+      } catch (const std::exception& error) {
+        RCLCPP_ERROR(this->get_logger(), "E-stop teardown failed: %s", error.what());
+      } catch (...) {
+        RCLCPP_ERROR(this->get_logger(), "E-stop teardown failed with unknown exception");
+      }
     } else if (state_id == lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE &&
                auto_start_timer_ && !auto_start_timer_->is_canceled()) {
       RCLCPP_WARN(this->get_logger(),
                   "非常停止押下を検出（%s=false）。cleanup してサーボ接続を解放します",
                   controllable_topic_.c_str());
-      this->cleanup();
+      try {
+        transitionToUnconfiguredForAutoRecovery("controllable=false", false);
+      } catch (const std::exception& error) {
+        RCLCPP_ERROR(this->get_logger(), "E-stop cleanup failed: %s", error.what());
+      } catch (...) {
+        RCLCPP_ERROR(this->get_logger(), "E-stop cleanup failed with unknown exception");
+      }
     }
     return;
   }
@@ -199,7 +284,41 @@ void ShotComponent::controllableCallback(const std_msgs::msg::Bool::SharedPtr ms
   // 周期を仕切り直してから即時試行する。失敗時（サーボ起動中など）は
   // connect_retry_period_sec 周期のリトライに引き継ぐ。
   auto_start_timer_->reset();
-  tryAutoStart();
+  try {
+    tryAutoStart();
+  } catch (const std::exception& error) {
+    RCLCPP_ERROR(this->get_logger(), "E-stop release auto-start failed: %s", error.what());
+  } catch (...) {
+    RCLCPP_ERROR(this->get_logger(), "E-stop release auto-start failed with unknown exception");
+  }
+}
+
+void ShotComponent::controllableTimeoutCallback() {
+  if (controllable_timed_out_ || controllable_timeout_sec_ <= 0.0 || !have_controllable_) {
+    return;
+  }
+  const double elapsed =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - last_controllable_time_)
+          .count();
+  const bool fail_safe = shot_auto_start::shouldFailSafeControllableTimeout(
+      controllable_timeout_sec_, have_controllable_, controllable_, elapsed);
+  if (elapsed <= controllable_timeout_sec_) {
+    return;
+  }
+  controllable_timed_out_ = true;
+  if (!fail_safe) {
+    return;
+  }
+  controllable_ = false;
+  RCLCPP_WARN(this->get_logger(), "%s reception timed out after %.2fs; applying fail-safe teardown",
+              controllable_topic_.c_str(), elapsed);
+  try {
+    transitionToUnconfiguredForAutoRecovery("controllable timeout", false);
+  } catch (const std::exception& error) {
+    RCLCPP_ERROR(this->get_logger(), "Controllable timeout teardown failed: %s", error.what());
+  } catch (...) {
+    RCLCPP_ERROR(this->get_logger(), "Controllable timeout teardown failed with unknown exception");
+  }
 }
 
 ShotComponent::CallbackReturn ShotComponent::on_configure(const rclcpp_lifecycle::State&) {
@@ -315,6 +434,8 @@ ShotComponent::CallbackReturn ShotComponent::on_cleanup(const rclcpp_lifecycle::
 }
 
 ShotComponent::CallbackReturn ShotComponent::on_shutdown(const rclcpp_lifecycle::State&) {
+  stopAutoStartTimers();
+  controllable_sub_.reset();
   joy_subscription_.reset();
   disconnectServo();
   RCLCPP_INFO(this->get_logger(), "Shot component shut down");

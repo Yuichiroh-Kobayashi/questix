@@ -14,6 +14,7 @@ namespace {
 using lifecycle_msgs::msg::State;
 using motor_control_app::shot_auto_start::AutoStartAction;
 using motor_control_app::shot_auto_start::decideAutoStartAction;
+using motor_control_app::shot_auto_start::shouldFailSafeControllableTimeout;
 
 // /gpio/controllable 未受信（enable_gpio_ref=false 等）は周期リトライにフォールバック
 TEST(ShotAutoStart, UnconfiguredWithoutControllableFallsBackToConfigure) {
@@ -56,13 +57,39 @@ TEST(ShotAutoStart, ActiveStopsTimerRegardlessOfEstop) {
             AutoStartAction::kStopTimer);
 }
 
-TEST(ShotAutoStart, FinalizedAndTransitionStatesDoNothing) {
+TEST(ShotAutoStart, FinalizedStopsTimerAndTransitionStatesDoNothing) {
   EXPECT_EQ(decideAutoStartAction(State::PRIMARY_STATE_FINALIZED, true, true),
-            AutoStartAction::kNone);
+            AutoStartAction::kStopTimer);
   EXPECT_EQ(decideAutoStartAction(State::TRANSITION_STATE_CONFIGURING, true, true),
             AutoStartAction::kNone);
   EXPECT_EQ(decideAutoStartAction(State::PRIMARY_STATE_UNKNOWN, true, true),
             AutoStartAction::kNone);
+}
+
+TEST(ShotAutoStart, ConfigureFailureRetriesFromUnconfigured) {
+  EXPECT_EQ(decideAutoStartAction(State::PRIMARY_STATE_UNCONFIGURED, false, false),
+            AutoStartAction::kConfigure);
+}
+
+TEST(ShotControllableTimeout, DisabledNeverFailsSafe) {
+  EXPECT_FALSE(shouldFailSafeControllableTimeout(0.0, true, true, 10.0));
+  EXPECT_FALSE(shouldFailSafeControllableTimeout(-1.0, true, true, 10.0));
+}
+
+TEST(ShotControllableTimeout, TrueSignalTimesOutFailSafe) {
+  EXPECT_TRUE(shouldFailSafeControllableTimeout(1.0, true, true, 1.01));
+}
+
+TEST(ShotControllableTimeout, FalseSignalTimeoutIsNoOp) {
+  EXPECT_FALSE(shouldFailSafeControllableTimeout(1.0, true, false, 2.0));
+}
+
+TEST(ShotControllableTimeout, NeverReceivedPreservesFallback) {
+  EXPECT_FALSE(shouldFailSafeControllableTimeout(1.0, false, false, 100.0));
+}
+
+TEST(ShotControllableTimeout, FreshOrRecoveredSignalIsNotStale) {
+  EXPECT_FALSE(shouldFailSafeControllableTimeout(1.0, true, true, 0.1));
 }
 
 }  // namespace

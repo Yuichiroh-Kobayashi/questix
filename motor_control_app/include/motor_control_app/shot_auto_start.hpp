@@ -22,7 +22,8 @@ enum class AutoStartAction { kConfigure, kActivate, kWaitEstopRelease, kStopTime
 // unconfigured -> kConfigure（接続を試行。非常停止中は kWaitEstopRelease で保留）
 // inactive     -> kActivate（運用状態へ遷移。非常停止中は kWaitEstopRelease で保留）
 // active       -> kStopTimer（正常稼働中。手動 deactivate/cleanup を尊重して停止）
-// それ以外（finalized・遷移中など）-> kNone（何もしない）
+// finalized    -> kStopTimer（以後の自動遷移を停止）
+// 遷移中・unknown -> kNone（何もしない）
 inline AutoStartAction decideAutoStartAction(uint8_t state_id, bool have_controllable,
                                              bool controllable) {
   const bool estop_active = have_controllable && !controllable;
@@ -32,10 +33,32 @@ inline AutoStartAction decideAutoStartAction(uint8_t state_id, bool have_control
     case lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE:
       return estop_active ? AutoStartAction::kWaitEstopRelease : AutoStartAction::kActivate;
     case lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE:
+    case lifecycle_msgs::msg::State::PRIMARY_STATE_FINALIZED:
       return AutoStartAction::kStopTimer;
     default:
       return AutoStartAction::kNone;
   }
+}
+
+inline bool isTransitionState(uint8_t state_id) {
+  switch (state_id) {
+    case lifecycle_msgs::msg::State::TRANSITION_STATE_CONFIGURING:
+    case lifecycle_msgs::msg::State::TRANSITION_STATE_CLEANINGUP:
+    case lifecycle_msgs::msg::State::TRANSITION_STATE_SHUTTINGDOWN:
+    case lifecycle_msgs::msg::State::TRANSITION_STATE_ACTIVATING:
+    case lifecycle_msgs::msg::State::TRANSITION_STATE_DEACTIVATING:
+    case lifecycle_msgs::msg::State::TRANSITION_STATE_ERRORPROCESSING:
+      return true;
+    default:
+      return false;
+  }
+}
+
+// /gpio/controllable 未受信時は publisher のない環境との互換性のため timeout にしない。
+// 一度受信後は、最後に true だった信号だけを fail-safe teardown の対象にする。
+inline bool shouldFailSafeControllableTimeout(double timeout_sec, bool have_controllable,
+                                              bool controllable, double elapsed_sec) {
+  return timeout_sec > 0.0 && have_controllable && controllable && elapsed_sec > timeout_sec;
 }
 
 }  // namespace motor_control_app::shot_auto_start
