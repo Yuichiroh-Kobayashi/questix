@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 
 #include <lifecycle_msgs/msg/state.hpp>
+#include <limits>
 
 #include "motor_control_app/shot_auto_start.hpp"
 
@@ -14,7 +15,12 @@ namespace {
 using lifecycle_msgs::msg::State;
 using motor_control_app::shot_auto_start::AutoStartAction;
 using motor_control_app::shot_auto_start::decideAutoStartAction;
-using motor_control_app::shot_auto_start::shouldFailSafeControllableTimeout;
+using motor_control_app::shot_auto_start::decideControllableTimeout;
+using motor_control_app::shot_auto_start::decideSafetyTeardownAction;
+using motor_control_app::shot_auto_start::normalizeControllableTimeout;
+using motor_control_app::shot_auto_start::normalizePositivePeriod;
+using motor_control_app::shot_auto_start::SafetyTeardownAction;
+using motor_control_app::shot_auto_start::shouldLogControllableRecovery;
 
 // /gpio/controllable 未受信（enable_gpio_ref=false 等）は周期リトライにフォールバック
 TEST(ShotAutoStart, UnconfiguredWithoutControllableFallsBackToConfigure) {
@@ -72,24 +78,54 @@ TEST(ShotAutoStart, ConfigureFailureRetriesFromUnconfigured) {
 }
 
 TEST(ShotControllableTimeout, DisabledNeverFailsSafe) {
-  EXPECT_FALSE(shouldFailSafeControllableTimeout(0.0, true, true, 10.0));
-  EXPECT_FALSE(shouldFailSafeControllableTimeout(-1.0, true, true, 10.0));
+  EXPECT_FALSE(decideControllableTimeout(0.0, true, true, 10.0).fail_safe);
+  EXPECT_FALSE(decideControllableTimeout(-1.0, true, true, 10.0).fail_safe);
 }
 
 TEST(ShotControllableTimeout, TrueSignalTimesOutFailSafe) {
-  EXPECT_TRUE(shouldFailSafeControllableTimeout(1.0, true, true, 1.01));
+  const auto decision = decideControllableTimeout(1.0, true, true, 1.01);
+  EXPECT_TRUE(decision.fail_safe);
+  EXPECT_TRUE(decision.latch_timeout);
 }
 
-TEST(ShotControllableTimeout, FalseSignalTimeoutIsNoOp) {
-  EXPECT_FALSE(shouldFailSafeControllableTimeout(1.0, true, false, 2.0));
+TEST(ShotControllableTimeout, FalseSignalTimeoutDoesNotLatch) {
+  const auto decision = decideControllableTimeout(1.0, true, false, 2.0);
+  EXPECT_FALSE(decision.fail_safe);
+  EXPECT_FALSE(decision.latch_timeout);
+  EXPECT_FALSE(shouldLogControllableRecovery(decision.latch_timeout));
 }
 
 TEST(ShotControllableTimeout, NeverReceivedPreservesFallback) {
-  EXPECT_FALSE(shouldFailSafeControllableTimeout(1.0, false, false, 100.0));
+  EXPECT_FALSE(decideControllableTimeout(1.0, false, false, 100.0).fail_safe);
 }
 
 TEST(ShotControllableTimeout, FreshOrRecoveredSignalIsNotStale) {
-  EXPECT_FALSE(shouldFailSafeControllableTimeout(1.0, true, true, 0.1));
+  EXPECT_FALSE(decideControllableTimeout(1.0, true, true, 0.1).fail_safe);
+}
+
+TEST(ShotSafetyTeardown, ActiveFailureRearmsRetry) {
+  EXPECT_EQ(decideSafetyTeardownAction(State::PRIMARY_STATE_ACTIVE),
+            SafetyTeardownAction::kRearmActive);
+  EXPECT_EQ(decideSafetyTeardownAction(State::PRIMARY_STATE_UNCONFIGURED),
+            SafetyTeardownAction::kResetRetry);
+  EXPECT_EQ(decideSafetyTeardownAction(State::PRIMARY_STATE_FINALIZED),
+            SafetyTeardownAction::kStopTimers);
+}
+
+TEST(ShotParameters, InvalidRetryPeriodFallsBackToDefault) {
+  EXPECT_DOUBLE_EQ(normalizePositivePeriod(2.5, 3.0), 2.5);
+  EXPECT_DOUBLE_EQ(normalizePositivePeriod(0.0, 3.0), 3.0);
+  EXPECT_DOUBLE_EQ(normalizePositivePeriod(-1.0, 3.0), 3.0);
+  EXPECT_DOUBLE_EQ(normalizePositivePeriod(std::numeric_limits<double>::quiet_NaN(), 3.0), 3.0);
+  EXPECT_DOUBLE_EQ(normalizePositivePeriod(std::numeric_limits<double>::infinity(), 3.0), 3.0);
+}
+
+TEST(ShotParameters, NonFiniteControllableTimeoutFallsBackToDefault) {
+  EXPECT_DOUBLE_EQ(normalizeControllableTimeout(0.0, 1.0), 0.0);
+  EXPECT_DOUBLE_EQ(normalizeControllableTimeout(-1.0, 1.0), -1.0);
+  EXPECT_DOUBLE_EQ(normalizeControllableTimeout(std::numeric_limits<double>::quiet_NaN(), 1.0),
+                   1.0);
+  EXPECT_DOUBLE_EQ(normalizeControllableTimeout(std::numeric_limits<double>::infinity(), 1.0), 1.0);
 }
 
 }  // namespace

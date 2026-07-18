@@ -6,6 +6,7 @@
 #ifndef MOTOR_CONTROL_APP__SHOT_AUTO_START_HPP_
 #define MOTOR_CONTROL_APP__SHOT_AUTO_START_HPP_
 
+#include <cmath>
 #include <cstdint>
 #include <lifecycle_msgs/msg/state.hpp>
 
@@ -13,6 +14,13 @@ namespace motor_control_app::shot_auto_start {
 
 // auto_start タイマー / 非常停止解除エッジが取るべきアクション
 enum class AutoStartAction { kConfigure, kActivate, kWaitEstopRelease, kStopTimer, kNone };
+
+enum class SafetyTeardownAction { kResetRetry, kRearmActive, kStopTimers, kNone };
+
+struct ControllableTimeoutDecision {
+  bool latch_timeout;
+  bool fail_safe;
+};
 
 // 現在の lifecycle 状態と /gpio/controllable の受信状況から自動起動アクションを決定する。
 // have_controllable: /gpio/controllable を1回でも受信したか。未受信の環境
@@ -54,11 +62,40 @@ inline bool isTransitionState(uint8_t state_id) {
   }
 }
 
+inline SafetyTeardownAction decideSafetyTeardownAction(uint8_t state_id) {
+  switch (state_id) {
+    case lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED:
+      return SafetyTeardownAction::kResetRetry;
+    case lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE:
+      return SafetyTeardownAction::kRearmActive;
+    case lifecycle_msgs::msg::State::PRIMARY_STATE_FINALIZED:
+      return SafetyTeardownAction::kStopTimers;
+    default:
+      return SafetyTeardownAction::kNone;
+  }
+}
+
 // /gpio/controllable 未受信時は publisher のない環境との互換性のため timeout にしない。
 // 一度受信後は、最後に true だった信号だけを fail-safe teardown の対象にする。
-inline bool shouldFailSafeControllableTimeout(double timeout_sec, bool have_controllable,
-                                              bool controllable, double elapsed_sec) {
-  return timeout_sec > 0.0 && have_controllable && controllable && elapsed_sec > timeout_sec;
+inline ControllableTimeoutDecision decideControllableTimeout(double timeout_sec,
+                                                             bool have_controllable,
+                                                             bool controllable,
+                                                             double elapsed_sec) {
+  const bool stale_true_signal = std::isfinite(timeout_sec) && timeout_sec > 0.0 &&
+                                 have_controllable && controllable && elapsed_sec > timeout_sec;
+  return {stale_true_signal, stale_true_signal};
+}
+
+inline bool shouldLogControllableRecovery(bool timeout_latched) { return timeout_latched; }
+
+inline bool isValidPositivePeriod(double value) { return std::isfinite(value) && value > 0.0; }
+
+inline double normalizePositivePeriod(double value, double fallback) {
+  return isValidPositivePeriod(value) ? value : fallback;
+}
+
+inline double normalizeControllableTimeout(double value, double fallback) {
+  return std::isfinite(value) ? value : fallback;
 }
 
 }  // namespace motor_control_app::shot_auto_start
