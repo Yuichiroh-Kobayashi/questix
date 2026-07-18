@@ -198,6 +198,7 @@ private:
   bool parseFeedback(int expected_motor_id, const std::vector<uint8_t>& frame);
 
   // Utility methods
+  bool drainSerialOutput();
   bool sendCommand(const std::vector<uint8_t>& command, int retry_count = 3);
   ssize_t writeSerial(const void* data, size_t size);
   ssize_t readSerial(void* data, size_t size);
