@@ -111,7 +111,8 @@ void ShotComponent::autoStartTimerCallback() {
       runtime_fault_.exchange(false)) {
     // ACTIVE 中に検出したサーボ通信故障からの自動復帰。一旦 deactivate→cleanup
     // で解体し、次周期以降の configure→activate で接続とサーボ応答を確認し直す。
-    RCLCPP_WARN(this->get_logger(), "サーボ通信故障を検出。deactivate→cleanup して再接続を試みます");
+    RCLCPP_WARN(this->get_logger(),
+                "サーボ通信故障を検出。deactivate→cleanup して再接続を試みます");
     this->deactivate();
     this->cleanup();
     // on_deactivate がタイマーを止めるため、自動復帰経路のみここで再開する
@@ -187,7 +188,7 @@ void ShotComponent::controllableCallback(const std_msgs::msg::Bool::SharedPtr ms
   }
 
   // 非常停止解除（または初回受信が解除状態）。タイマー停止中は手動運用
-  //（手動 deactivate 済み or 正常 ACTIVE）なので自動遷移しない。
+  // （手動 deactivate 済み or 正常 ACTIVE）なので自動遷移しない。
   if (!auto_start_timer_ || auto_start_timer_->is_canceled()) {
     return;
   }
