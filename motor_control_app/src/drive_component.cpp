@@ -5,15 +5,21 @@
 // https://opensource.org/licenses/MIT.
 #include "motor_control_app/drive_component.hpp"
 
+#include <algorithm>
 #include <chrono>
+#include <exception>
+#include <filesystem>
 #include <functional>
+#include <lifecycle_msgs/msg/state.hpp>
+
+#include "motor_control_app/lifecycle_auto_start.hpp"
 
 using namespace std::chrono_literals;
 
 namespace motor_control_app {
 
 DriveComponent::DriveComponent(const rclcpp::NodeOptions& options)
-    : Node("drive_component", options),
+    : rclcpp_lifecycle::LifecycleNode("drive_component", options),
       last_cmd_linear_(0.0),
       last_cmd_angular_(0.0),
       last_cmd_time_(0, 0, RCL_ROS_TIME),
@@ -21,28 +27,163 @@ DriveComponent::DriveComponent(const rclcpp::NodeOptions& options)
       cmd_timeout_sec_(0.5),
       motor_initialized_(false),
       emergency_stop_active_(false) {
-  RCLCPP_INFO(this->get_logger(), "Initializing Drive Component");
+  // パラメーター宣言（取得は on_configure で行い、cleanup→configure で再読込できるようにする）
+  declareParameters();
 
-  // パラメータを初期化
-  initializeParameters();
-
-  // DDTモータライブラリを初期化
-  if (!initializeMotorLib()) {
-    RCLCPP_ERROR(this->get_logger(), "Failed to initialize motor library");
-    return;
+  auto_start_ = this->get_parameter("auto_start").as_bool();
+  const double requested_retry_period = this->get_parameter("connect_retry_period_sec").as_double();
+  connect_retry_period_sec_ =
+      lifecycle_auto_start::normalizeRetryPeriod(requested_retry_period, 1.0);
+  if (!lifecycle_auto_start::isValidPositiveValue(requested_retry_period)) {
+    RCLCPP_WARN(this->get_logger(),
+                "Invalid connect_retry_period_sec=%g; using the default 1.0 seconds",
+                requested_retry_period);
   }
 
-  // ROS 2 通信の設定
+  if (auto_start_) {
+    const auto period = std::chrono::duration<double>(std::max(0.5, connect_retry_period_sec_));
+    auto_start_timer_ =
+        this->create_wall_timer(std::chrono::duration_cast<std::chrono::nanoseconds>(period),
+                                std::bind(&DriveComponent::autoStartTimerCallback, this));
+    RCLCPP_INFO(this->get_logger(),
+                "Drive component created (auto_start=true, retry=%.1fs). "
+                "モータ通電（非常停止解除）を待って自動起動します",
+                connect_retry_period_sec_);
+  } else {
+    RCLCPP_INFO(this->get_logger(),
+                "Drive component created (auto_start=false). "
+                "外部から lifecycle configure/activate してください");
+  }
+}
+
+DriveComponent::~DriveComponent() {
+  if (auto_start_timer_) {
+    auto_start_timer_->cancel();
+  }
+  if (status_timer_) {
+    status_timer_->cancel();
+  }
+  if (watchdog_timer_) {
+    watchdog_timer_->cancel();
+  }
+  shutdownMotorLib();
+}
+
+void DriveComponent::autoStartTimerCallback() {
+  using lifecycle_auto_start::AutoStartAction;
+  using lifecycle_auto_start::decideAutoStartAction;
+
+  if (!auto_start_timer_) {
+    return;
+  }
+  try {
+    uint8_t state_id = this->get_current_state().id();
+    AutoStartAction action = decideAutoStartAction(state_id);
+    if (action == AutoStartAction::kConfigure) {
+      RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 30000,
+                           "モータ接続を試行します（未通電時は失敗し、通電後に自動復帰します）");
+      state_id = this->configure().id();
+      action = decideAutoStartAction(state_id);
+    }
+    if (action == AutoStartAction::kActivate) {
+      state_id = this->activate().id();
+      action = decideAutoStartAction(state_id);
+    }
+    if (action == AutoStartAction::kStopTimer) {
+      auto_start_timer_->cancel();
+    } else if (action == AutoStartAction::kNone &&
+               !lifecycle_auto_start::isTransitionState(state_id)) {
+      RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 30000,
+                           "Unexpected lifecycle state during drive auto-start: %u",
+                           static_cast<unsigned int>(state_id));
+    }
+  } catch (const std::exception& error) {
+    RCLCPP_ERROR(this->get_logger(), "Drive auto-start transition failed: %s", error.what());
+  } catch (...) {
+    RCLCPP_ERROR(this->get_logger(), "Drive auto-start transition failed with unknown exception");
+  }
+}
+
+DriveComponent::CallbackReturn DriveComponent::on_configure(const rclcpp_lifecycle::State&) {
+  readParameters();
+
+  if (!lifecycle_auto_start::isValidStatusPublishRate(status_publish_rate_)) {
+    RCLCPP_ERROR(this->get_logger(),
+                 "Invalid status_publish_rate=%g; value must produce a positive, representable "
+                 "nanosecond timer period",
+                 status_publish_rate_);
+    return CallbackReturn::FAILURE;
+  }
+
+  // 未通電（非常停止中）は USB CDC デバイス自体が存在しない。ライブラリを構築する前に
+  // デバイスの有無を確認し、リトライ毎のライブラリ内 ERROR ログで journald を汚さない。
+  if (!std::filesystem::exists(serial_port_)) {
+    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 30000,
+                         "シリアルデバイス %s がありません（モータ未通電の可能性）。"
+                         "通電を待って再試行します",
+                         serial_port_.c_str());
+    return CallbackReturn::FAILURE;
+  }
+
+  // シリアル接続 + モータ初期化（非常停止中はポートが無い / 開けない場合がある）
+  if (!initializeMotorLib()) {
+    // 半構築のインスタンスを残さない（次回の configure 再試行のため）
+    diff_drive_.reset();
+    motor_lib_.reset();
+    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 30000,
+                         "モータ初期化に失敗しました (port=%s)。通電を待って再試行します",
+                         serial_port_.c_str());
+    return CallbackReturn::FAILURE;
+  }
+
+  RCLCPP_INFO(this->get_logger(), "Parameters:");
+  RCLCPP_INFO(this->get_logger(), "  serial_port: %s", serial_port_.c_str());
+  RCLCPP_INFO(this->get_logger(), "  baud_rate: %d", baud_rate_);
+  RCLCPP_INFO(this->get_logger(), "  wheel_radius: %.3f", wheel_radius_);
+  RCLCPP_INFO(this->get_logger(), "  wheel_separation: %.3f", wheel_separation_);
+  RCLCPP_INFO(this->get_logger(), "  left_motor_id: %d", left_motor_id_);
+  RCLCPP_INFO(this->get_logger(), "  right_motor_id: %d", right_motor_id_);
+  RCLCPP_INFO(this->get_logger(), "  max_motor_rpm: %d", max_motor_rpm_);
+  RCLCPP_INFO(this->get_logger(), "  status_publish_rate: %.1f", status_publish_rate_);
+  RCLCPP_INFO(this->get_logger(), "  status_topic: %s", status_topic_.c_str());
+  RCLCPP_INFO(this->get_logger(), "  cmd_timeout_sec: %.2f", cmd_timeout_sec_);
+  RCLCPP_INFO(this->get_logger(), "  control_mode: %s", control_mode_.c_str());
+  if (control_mode_ == "current") {
+    RCLCPP_INFO(
+        this->get_logger(),
+        "  current_kp: %.4f  current_ki: %.4f  max_current_amp: %.2f  integral_limit_amp: %.2f",
+        current_kp_, current_ki_, max_current_amp_, integral_limit_amp_);
+    RCLCPP_INFO(this->get_logger(), "  current_zero_deadband_rpm: %d", current_zero_deadband_rpm_);
+  }
+
+  // twist 購読（コールバックは ACTIVE のときのみ処理する）
   twist_subscription_ = this->create_subscription<geometry_msgs::msg::Twist>(
       "/target_twist", 1, std::bind(&DriveComponent::twistCallback, this, std::placeholders::_1));
 
+  // LifecyclePublisher のため on_activate まで publish は無効
   status_publisher_ = this->create_publisher<std_msgs::msg::String>(status_topic_, 1);
 
+  RCLCPP_INFO(this->get_logger(), "Drive component configured");
+  return CallbackReturn::SUCCESS;
+}
+
+DriveComponent::CallbackReturn DriveComponent::on_activate(const rclcpp_lifecycle::State& state) {
+  if (!motor_initialized_ || !diff_drive_) {
+    RCLCPP_ERROR(this->get_logger(), "Motor library not initialized, cannot activate");
+    return CallbackReturn::FAILURE;
+  }
+
+  // LifecyclePublisher を有効化（ステータスタイマー作成より先に呼ぶ）
+  rclcpp_lifecycle::LifecycleNode::on_activate(state);
+
+  // inactive 中の残留指令でスルーレートクランプが誤動作しないようリセット
+  resetCommandState();
+
   // ステータスパブリッシュタイマー
-  auto timer_period = std::chrono::duration<double>(1.0 / status_publish_rate_);
+  const auto timer_period = std::chrono::nanoseconds(
+      lifecycle_auto_start::statusTimerPeriodNanoseconds(status_publish_rate_));
   status_timer_ =
-      this->create_wall_timer(std::chrono::duration_cast<std::chrono::milliseconds>(timer_period),
-                              std::bind(&DriveComponent::statusTimerCallback, this));
+      this->create_wall_timer(timer_period, std::bind(&DriveComponent::statusTimerCallback, this));
 
   // コマンド受信ウォッチドッグ（100ms 周期）。cmd_timeout_sec_ <= 0 で無効。
   if (drive_watchdog::isEnabled(cmd_timeout_sec_)) {
@@ -54,21 +195,71 @@ DriveComponent::DriveComponent(const rclcpp::NodeOptions& options)
                 "last command if /target_twist stops");
   }
 
-  RCLCPP_INFO(this->get_logger(), "Drive Component initialized successfully");
-}
-
-DriveComponent::~DriveComponent() {
-  if (motor_lib_ && motor_initialized_) {
-    RCLCPP_INFO(this->get_logger(), "Shutting down motor library");
-    if (diff_drive_) {
-      diff_drive_->stop();
-    }
-    motor_lib_->emergencyStop();
-    motor_lib_->shutdown();
+  RCLCPP_INFO(this->get_logger(), "Drive component activated");
+  // 稼働状態に到達。以降は自動再遷移を止めて手動 deactivate/cleanup を尊重する。
+  if (auto_start_timer_) {
+    auto_start_timer_->cancel();
   }
+  return CallbackReturn::SUCCESS;
 }
 
-void DriveComponent::initializeParameters() {
+DriveComponent::CallbackReturn DriveComponent::on_deactivate(const rclcpp_lifecycle::State& state) {
+  status_timer_.reset();
+  watchdog_timer_.reset();
+  // best-effort で停止指令（電流PI積分状態もリセットされる）
+  if (diff_drive_) {
+    diff_drive_->stop();
+  }
+  resetCommandState();
+  rclcpp_lifecycle::LifecycleNode::on_deactivate(state);
+  // 手動 deactivate を含め、deactivate では自動再遷移を必ず止める
+  // （shot_component bc037d1 と同じ扱い）。
+  if (auto_start_timer_) {
+    auto_start_timer_->cancel();
+  }
+  RCLCPP_INFO(this->get_logger(), "Drive component deactivated (twist input ignored)");
+  return CallbackReturn::SUCCESS;
+}
+
+DriveComponent::CallbackReturn DriveComponent::on_cleanup(const rclcpp_lifecycle::State&) {
+  status_timer_.reset();
+  watchdog_timer_.reset();
+  twist_subscription_.reset();
+  status_publisher_.reset();
+  shutdownMotorLib();
+  RCLCPP_INFO(this->get_logger(), "Drive component cleaned up");
+  return CallbackReturn::SUCCESS;
+}
+
+DriveComponent::CallbackReturn DriveComponent::on_shutdown(const rclcpp_lifecycle::State&) {
+  if (auto_start_timer_) {
+    auto_start_timer_->cancel();
+  }
+  status_timer_.reset();
+  watchdog_timer_.reset();
+  twist_subscription_.reset();
+  status_publisher_.reset();
+  shutdownMotorLib();
+  RCLCPP_INFO(this->get_logger(), "Drive component shut down");
+  return CallbackReturn::SUCCESS;
+}
+
+DriveComponent::CallbackReturn DriveComponent::on_error(const rclcpp_lifecycle::State&) {
+  // 遷移中に ERROR / 例外が発生したときの後始末。リソースを解放して unconfigured
+  // に戻し、auto_start 有効時はタイマーを再開して自動復帰に委ねる。
+  status_timer_.reset();
+  watchdog_timer_.reset();
+  twist_subscription_.reset();
+  status_publisher_.reset();
+  shutdownMotorLib();
+  if (auto_start_ && auto_start_timer_) {
+    auto_start_timer_->reset();
+  }
+  RCLCPP_WARN(this->get_logger(), "Drive component error handled, returning to unconfigured");
+  return CallbackReturn::SUCCESS;
+}
+
+void DriveComponent::declareParameters() {
   // DDTモータライブラリのパラメータを宣言
   this->declare_parameter("serial_port", "/dev/ttyACM0");
   this->declare_parameter("baud_rate", 115200);
@@ -100,7 +291,12 @@ void DriveComponent::initializeParameters() {
   // 指令送信後の追加待機 [ms]。0で無効。実機の最小コマンド間隔要件用の保険
   this->declare_parameter("command_wait_ms", 0);
 
-  // パラメータを取得
+  // Lifecycle 自動遷移。非常停止解除でモータが通電するまで configure を再試行する。
+  this->declare_parameter("auto_start", true);
+  this->declare_parameter("connect_retry_period_sec", 1.0);
+}
+
+void DriveComponent::readParameters() {
   serial_port_ = this->get_parameter("serial_port").as_string();
   baud_rate_ = this->get_parameter("baud_rate").as_int();
   wheel_radius_ = this->get_parameter("wheel_radius").as_double();
@@ -122,26 +318,6 @@ void DriveComponent::initializeParameters() {
   brake_on_stop_ = this->get_parameter("brake_on_stop").as_bool();
   cmd_timeout_sec_ = this->get_parameter("cmd_timeout_sec").as_double();
   command_wait_ms_ = static_cast<int>(this->get_parameter("command_wait_ms").as_int());
-
-  RCLCPP_INFO(this->get_logger(), "Parameters initialized:");
-  RCLCPP_INFO(this->get_logger(), "  serial_port: %s", serial_port_.c_str());
-  RCLCPP_INFO(this->get_logger(), "  baud_rate: %d", baud_rate_);
-  RCLCPP_INFO(this->get_logger(), "  wheel_radius: %.3f", wheel_radius_);
-  RCLCPP_INFO(this->get_logger(), "  wheel_separation: %.3f", wheel_separation_);
-  RCLCPP_INFO(this->get_logger(), "  left_motor_id: %d", left_motor_id_);
-  RCLCPP_INFO(this->get_logger(), "  right_motor_id: %d", right_motor_id_);
-  RCLCPP_INFO(this->get_logger(), "  max_motor_rpm: %d", max_motor_rpm_);
-  RCLCPP_INFO(this->get_logger(), "  status_publish_rate: %.1f", status_publish_rate_);
-  RCLCPP_INFO(this->get_logger(), "  status_topic: %s", status_topic_.c_str());
-  RCLCPP_INFO(this->get_logger(), "  cmd_timeout_sec: %.2f", cmd_timeout_sec_);
-  RCLCPP_INFO(this->get_logger(), "  control_mode: %s", control_mode_.c_str());
-  if (control_mode_ == "current") {
-    RCLCPP_INFO(
-        this->get_logger(),
-        "  current_kp: %.4f  current_ki: %.4f  max_current_amp: %.2f  integral_limit_amp: %.2f",
-        current_kp_, current_ki_, max_current_amp_, integral_limit_amp_);
-    RCLCPP_INFO(this->get_logger(), "  current_zero_deadband_rpm: %d", current_zero_deadband_rpm_);
-  }
 }
 
 bool DriveComponent::initializeMotorLib() {
@@ -161,9 +337,8 @@ bool DriveComponent::initializeMotorLib() {
     // 指令送信後の追加待機（既定 0 = 無効）
     motor_lib_->setCommandWaitMs(command_wait_ms_);
 
-    // モータライブラリを初期化
+    // モータライブラリを初期化（シリアルポートを開く。未通電なら失敗して再試行に回る）
     if (!motor_lib_->initialize()) {
-      RCLCPP_ERROR(this->get_logger(), "Failed to initialize motor library");
       return false;
     }
 
@@ -201,7 +376,32 @@ bool DriveComponent::initializeMotorLib() {
   }
 }
 
+void DriveComponent::shutdownMotorLib() {
+  if (motor_lib_ && motor_initialized_) {
+    RCLCPP_INFO(this->get_logger(), "Shutting down motor library");
+    if (diff_drive_) {
+      diff_drive_->stop();
+    }
+    motor_lib_->emergencyStop();
+    motor_lib_->shutdown();
+  }
+  diff_drive_.reset();
+  motor_lib_.reset();
+  motor_initialized_ = false;
+}
+
+void DriveComponent::resetCommandState() {
+  has_last_cmd_ = false;
+  last_cmd_linear_ = 0.0;
+  last_cmd_angular_ = 0.0;
+}
+
 void DriveComponent::twistCallback(const geometry_msgs::msg::Twist::SharedPtr msg) {
+  // inactive 中の twist は無視する（lifecycle activate 後にのみ駆動する）
+  if (this->get_current_state().id() != lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
+    return;
+  }
+
   bool motor_ready = motor_initialized_ && diff_drive_ != nullptr;
   switch (drive_watchdog::decideTwistAction(motor_ready, emergency_stop_active_,
                                             motor_ready && diff_drive_->isHealthy())) {
@@ -213,9 +413,7 @@ void DriveComponent::twistCallback(const geometry_msgs::msg::Twist::SharedPtr ms
     case drive_watchdog::TwistAction::kFaultStop:
       // モータ異常中は最後の指令を保持せず、明示的に停止指令を送る。
       diff_drive_->stop();
-      has_last_cmd_ = false;
-      last_cmd_linear_ = 0.0;
-      last_cmd_angular_ = 0.0;
+      resetCommandState();
       RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
                            "Motor not healthy: sending stop command");
       return;
@@ -280,9 +478,7 @@ void DriveComponent::watchdogTimerCallback() {
     diff_drive_->stop();
     // 再発火防止（イベント毎に WARN 1回）。次の /target_twist で自動的に再武装し、
     // スルーレートクランプもゼロから再スタートする。
-    has_last_cmd_ = false;
-    last_cmd_linear_ = 0.0;
-    last_cmd_angular_ = 0.0;
+    resetCommandState();
   }
 }
 
