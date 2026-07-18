@@ -15,7 +15,13 @@ namespace motor_control_app::shot_auto_start {
 // auto_start タイマー / 非常停止解除エッジが取るべきアクション
 enum class AutoStartAction { kConfigure, kActivate, kWaitEstopRelease, kStopTimer, kNone };
 
-enum class SafetyTeardownAction { kResetRetry, kRearmActive, kStopTimers, kNone };
+enum class SafetyTeardownAction {
+  kResetRetry,
+  kRetryDeactivate,
+  kRetryCleanup,
+  kStopTimers,
+  kNone
+};
 
 struct ControllableTimeoutDecision {
   bool latch_timeout;
@@ -67,12 +73,25 @@ inline SafetyTeardownAction decideSafetyTeardownAction(uint8_t state_id) {
     case lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED:
       return SafetyTeardownAction::kResetRetry;
     case lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE:
-      return SafetyTeardownAction::kRearmActive;
+      return SafetyTeardownAction::kRetryDeactivate;
+    case lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE:
+      return SafetyTeardownAction::kRetryCleanup;
     case lifecycle_msgs::msg::State::PRIMARY_STATE_FINALIZED:
       return SafetyTeardownAction::kStopTimers;
     default:
       return SafetyTeardownAction::kNone;
   }
+}
+
+// A canceled auto-start timer in a manually reached stable pre-active state is an operator hold.
+// Safety teardown still takes precedence while ACTIVE, even though normal activation cancels the
+// timer.
+inline bool shouldHoldManualLifecycle(uint8_t state_id, bool auto_start_timer_canceled) {
+  if (!auto_start_timer_canceled) {
+    return false;
+  }
+  return state_id == lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE ||
+         state_id == lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED;
 }
 
 // /gpio/controllable 未受信時は publisher のない環境との互換性のため timeout にしない。

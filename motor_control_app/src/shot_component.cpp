@@ -42,6 +42,7 @@ ShotComponent::ShotComponent(const rclcpp::NodeOptions& options)
       controllable_(false),
       controllable_timed_out_(false),
       runtime_fault_(false),
+      teardown_pending_(false),
       is_shooting_(false),
       last_button_state_(false),
       last_tilt_value_(0.0F),
@@ -136,12 +137,28 @@ ShotComponent::~ShotComponent() {
 void ShotComponent::autoStartTimerCallback() {
   try {
     const uint8_t state_id = this->get_current_state().id();
-    if (state_id == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE &&
-        runtime_fault_.exchange(false)) {
-      RCLCPP_WARN(this->get_logger(),
-                  "サーボ通信故障を検出。deactivate→cleanup して再接続を試みます");
-      transitionToUnconfiguredForAutoRecovery("runtime fault");
+    const bool runtime_fault = runtime_fault_.load();
+    const bool teardown_pending = teardown_pending_.load();
+    if ((runtime_fault || teardown_pending) &&
+        (state_id == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE ||
+         state_id == lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE)) {
+      if (runtime_fault) {
+        RCLCPP_WARN(this->get_logger(),
+                    "サーボ通信故障を検出。deactivate→cleanup して再接続を試みます");
+      } else {
+        RCLCPP_WARN(this->get_logger(),
+                    "未完了の安全teardownを検出。deactivate/cleanupを再試行します");
+      }
+      transitionToUnconfiguredForAutoRecovery(runtime_fault ? "runtime fault"
+                                                            : "pending safety teardown");
       return;
+    }
+    if (teardown_pending && (state_id == lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED ||
+                             state_id == lifecycle_msgs::msg::State::PRIMARY_STATE_FINALIZED)) {
+      handleSafetyTeardownState("pending safety teardown", state_id);
+      if (state_id == lifecycle_msgs::msg::State::PRIMARY_STATE_FINALIZED) {
+        return;
+      }
     }
     tryAutoStart();
   } catch (const std::exception& error) {
@@ -240,15 +257,24 @@ void ShotComponent::handleSafetyTeardownState(const char* reason, uint8_t state_
     switch (shot_auto_start::decideSafetyTeardownAction(state_id)) {
       case SafetyTeardownAction::kResetRetry:
         runtime_fault_ = false;
+        teardown_pending_ = false;
         auto_start_timer_->reset();
         return;
-      case SafetyTeardownAction::kRearmActive:
-        runtime_fault_ = true;
+      case SafetyTeardownAction::kRetryDeactivate:
+        teardown_pending_ = true;
         auto_start_timer_->reset();
-        RCLCPP_WARN(this->get_logger(), "%s teardown left ShotComponent ACTIVE; retry armed",
-                    reason);
+        RCLCPP_WARN(this->get_logger(),
+                    "%s teardown left ShotComponent ACTIVE; deactivate retry armed", reason);
+        return;
+      case SafetyTeardownAction::kRetryCleanup:
+        teardown_pending_ = true;
+        auto_start_timer_->reset();
+        RCLCPP_WARN(this->get_logger(),
+                    "%s teardown left ShotComponent INACTIVE; cleanup retry armed", reason);
         return;
       case SafetyTeardownAction::kStopTimers:
+        runtime_fault_ = false;
+        teardown_pending_ = false;
         stopAutoStartTimers();
         return;
       case SafetyTeardownAction::kNone:
@@ -348,9 +374,10 @@ void ShotComponent::controllableTimeoutCallback() {
   controllable_timed_out_ = decision.latch_timeout;
   controllable_ = false;
   // ACTIVEでは通常運転到達時にtimerがcancel済みでもfail-safe teardownする。
-  // INACTIVEかつcancel済みはmanual deactivateなのでcleanup/retryで覆さない。
-  if (this->get_current_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE &&
-      (!auto_start_timer_ || auto_start_timer_->is_canceled())) {
+  // INACTIVE/UNCONFIGUREDかつcancel済みはmanual lifecycle操作として尊重する。
+  const uint8_t state_id = this->get_current_state().id();
+  const bool timer_canceled = !auto_start_timer_ || auto_start_timer_->is_canceled();
+  if (shot_auto_start::shouldHoldManualLifecycle(state_id, timer_canceled)) {
     return;
   }
   RCLCPP_WARN(this->get_logger(), "%s reception timed out after %.2fs; applying fail-safe teardown",
@@ -456,6 +483,7 @@ ShotComponent::CallbackReturn ShotComponent::on_deactivate(const rclcpp_lifecycl
   // タイマー発火までの間に手動 deactivate されても再 activate しないための処置で、
   // 自動復帰経路（autoStartTimerCallback）は cleanup 後にタイマーを明示的に再開する。
   runtime_fault_ = false;
+  teardown_pending_ = false;
   if (auto_start_timer_) {
     auto_start_timer_->cancel();
   }
@@ -464,6 +492,7 @@ ShotComponent::CallbackReturn ShotComponent::on_deactivate(const rclcpp_lifecycl
 }
 
 ShotComponent::CallbackReturn ShotComponent::on_cleanup(const rclcpp_lifecycle::State&) {
+  teardown_pending_ = false;
   joy_subscription_.reset();
   disconnectServo();
   RCLCPP_INFO(this->get_logger(), "Shot component cleaned up");
@@ -471,6 +500,8 @@ ShotComponent::CallbackReturn ShotComponent::on_cleanup(const rclcpp_lifecycle::
 }
 
 ShotComponent::CallbackReturn ShotComponent::on_shutdown(const rclcpp_lifecycle::State&) {
+  runtime_fault_ = false;
+  teardown_pending_ = false;
   stopAutoStartTimers();
   controllable_sub_.reset();
   joy_subscription_.reset();
@@ -485,6 +516,7 @@ ShotComponent::CallbackReturn ShotComponent::on_error(const rclcpp_lifecycle::St
   joy_subscription_.reset();
   disconnectServo();
   runtime_fault_ = false;
+  teardown_pending_ = false;
   if (auto_start_ && auto_start_timer_) {
     auto_start_timer_->reset();
   }

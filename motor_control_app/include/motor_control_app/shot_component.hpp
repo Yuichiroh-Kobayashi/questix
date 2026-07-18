@@ -95,6 +95,9 @@ private:
   // ACTIVE 中に検出したサーボ通信故障のフラグ。autoStartTimerCallback が拾って
   // deactivate→cleanup→再接続の自動復帰を行う。
   std::atomic<bool> runtime_fault_;
+  // 非常停止や通信故障によるdeactivate/cleanupが完了していない状態。
+  // ACTIVEではdeactivate、INACTIVEではcleanupをtimerから再試行する。
+  std::atomic<bool> teardown_pending_;
 
   bool is_shooting_;
   bool last_button_state_;
@@ -109,7 +112,8 @@ private:
   // All callbacks intentionally use the node's default MutuallyExclusive callback group:
   // auto-start, controllable input/timeout, joy input, and the future fire timer added by PR #117.
   // If these entities are split across callback groups, synchronize lifecycle/controllable state,
-  // timer pointers, runtime_fault_, is_shooting_, servo_controller_, and servo serial I/O.
+  // timer pointers, runtime_fault_, teardown_pending_, is_shooting_, servo_controller_, and servo
+  // serial I/O.
   // lifecycle 状態に依存せず常時生かす（unconfigured でも非常停止解除を検知するため）
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr controllable_sub_;
   rclcpp::TimerBase::SharedPtr auto_start_timer_;
