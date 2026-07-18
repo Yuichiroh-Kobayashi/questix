@@ -127,6 +127,7 @@ ShotComponent::ShotComponent(const rclcpp::NodeOptions& options)
 
 ShotComponent::~ShotComponent() {
   stopAutoStartTimers();
+  cancelShotSequence();
   try {
     disconnectServo();
   } catch (...) {
@@ -223,6 +224,7 @@ void ShotComponent::transitionToUnconfiguredForAutoRecovery(const char* reason) 
   try {
     uint8_t state_id = this->get_current_state().id();
     if (state_id == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
+      cancelShotSequence();
       state_id = this->deactivate().id();
     }
     if (state_id == lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE) {
@@ -399,7 +401,13 @@ ShotComponent::CallbackReturn ShotComponent::on_configure(const rclcpp_lifecycle
   tilt_max_angle_ = this->get_parameter("tilt_max_angle").as_double();
   fire_angle_ = this->get_parameter("fire_angle").as_double();
   home_angle_ = this->get_parameter("home_angle").as_double();
-  fire_duration_ms_ = this->get_parameter("fire_duration_ms").as_int();
+  const int64_t requested_fire_duration_ms = this->get_parameter("fire_duration_ms").as_int();
+  if (!shot_auto_start::isValidFireDurationMs(requested_fire_duration_ms)) {
+    RCLCPP_ERROR(this->get_logger(), "Invalid fire_duration_ms=%lld; value must be non-negative",
+                 static_cast<long long>(requested_fire_duration_ms));
+    return CallbackReturn::FAILURE;
+  }
+  fire_duration_ms_ = requested_fire_duration_ms;
   command_rate_limit_ms_ = this->get_parameter("command_rate_limit_ms").as_int();
   std::string joy_topic = this->get_parameter("joy_topic").as_string();
 
@@ -450,6 +458,7 @@ ShotComponent::CallbackReturn ShotComponent::on_activate(const rclcpp_lifecycle:
   }
 
   // エッジ検出状態をリセット（inactive 中に押されたボタンで誤発射しないため）
+  cancelShotSequence();
   is_shooting_ = false;
   last_button_state_ = false;
   last_tilt_value_ = 0.0F;
@@ -479,6 +488,7 @@ ShotComponent::CallbackReturn ShotComponent::on_activate(const rclcpp_lifecycle:
 }
 
 ShotComponent::CallbackReturn ShotComponent::on_deactivate(const rclcpp_lifecycle::State&) {
+  cancelShotSequence();
   // 手動 deactivate を含め、deactivate では自動再遷移を必ず止める。故障検出から
   // タイマー発火までの間に手動 deactivate されても再 activate しないための処置で、
   // 自動復帰経路（autoStartTimerCallback）は cleanup 後にタイマーを明示的に再開する。
@@ -492,6 +502,7 @@ ShotComponent::CallbackReturn ShotComponent::on_deactivate(const rclcpp_lifecycl
 }
 
 ShotComponent::CallbackReturn ShotComponent::on_cleanup(const rclcpp_lifecycle::State&) {
+  cancelShotSequence();
   teardown_pending_ = false;
   joy_subscription_.reset();
   disconnectServo();
@@ -503,6 +514,7 @@ ShotComponent::CallbackReturn ShotComponent::on_shutdown(const rclcpp_lifecycle:
   runtime_fault_ = false;
   teardown_pending_ = false;
   stopAutoStartTimers();
+  cancelShotSequence();
   controllable_sub_.reset();
   joy_subscription_.reset();
   disconnectServo();
@@ -513,6 +525,7 @@ ShotComponent::CallbackReturn ShotComponent::on_shutdown(const rclcpp_lifecycle:
 ShotComponent::CallbackReturn ShotComponent::on_error(const rclcpp_lifecycle::State&) {
   // 遷移中に ERROR / 例外が発生したときの後始末。リソースを解放して unconfigured
   // に戻し、auto_start 有効時はタイマーを再開して自動復帰に委ねる。
+  cancelShotSequence();
   joy_subscription_.reset();
   disconnectServo();
   runtime_fault_ = false;
@@ -629,32 +642,95 @@ void ShotComponent::executeShotSequence() {
     return;  // 既に射撃中の場合は無視
   }
 
-  is_shooting_ = true;
   RCLCPP_INFO(this->get_logger(), "Starting shot sequence...");
 
-  // 1. 射撃位置に移動
+  if (!servo_controller_ || !servo_controller_->isConnected()) {
+    RCLCPP_ERROR(this->get_logger(), "Cannot start shot sequence: servo is disconnected");
+    triggerAutoRecovery();
+    return;
+  }
+
   int fire_position = angleToServoPosition(fire_angle_);
-  if (servo_controller_->setPosition(trigger_servo_id_, fire_position, false)) {
-    RCLCPP_INFO(this->get_logger(), "Moved to fire position (%.1f deg)", fire_angle_);
+  if (!servo_controller_->setPosition(trigger_servo_id_, fire_position, false)) {
+    RCLCPP_ERROR(this->get_logger(), "Failed to move to fire position");
+    triggerAutoRecovery();
+    return;
+  }
+  RCLCPP_INFO(this->get_logger(), "Moved to fire position (%.1f deg)", fire_angle_);
 
-    // 射撃持続時間待機
-    std::this_thread::sleep_for(std::chrono::milliseconds(fire_duration_ms_));
+  is_shooting_ = true;
+  try {
+    fire_timer_ = this->create_wall_timer(std::chrono::milliseconds(fire_duration_ms_),
+                                          std::bind(&ShotComponent::fireTimerCallback, this));
+  } catch (const std::exception& error) {
+    RCLCPP_ERROR(this->get_logger(), "Failed to create shot fire timer: %s", error.what());
+    recoverFromShotTimerCreationFailure();
+  } catch (...) {
+    RCLCPP_ERROR(this->get_logger(), "Failed to create shot fire timer: unknown exception");
+    recoverFromShotTimerCreationFailure();
+  }
+}
 
-    // 2. すべてのサーボをホーム位置に戻る
-    int home_position = angleToServoPosition(home_angle_);
-    if (servo_controller_->setPosition(trigger_servo_id_, home_position, false)) {
+void ShotComponent::recoverFromShotTimerCreationFailure() noexcept {
+  cancelShotSequence();
+  try {
+    triggerAutoRecovery();
+  } catch (const std::exception& error) {
+    RCLCPP_ERROR(this->get_logger(), "Shot timer recovery trigger failed: %s", error.what());
+  } catch (...) {
+    RCLCPP_ERROR(this->get_logger(), "Shot timer recovery trigger failed with unknown exception");
+  }
+}
+
+void ShotComponent::fireTimerCallback() {
+  if (fire_timer_) {
+    fire_timer_->cancel();
+    fire_timer_.reset();
+  }
+  is_shooting_ = false;
+  try {
+    const int home_position = angleToServoPosition(home_angle_);
+    if (servo_controller_ && servo_controller_->isConnected() &&
+        servo_controller_->setPosition(trigger_servo_id_, home_position, false)) {
       RCLCPP_INFO(this->get_logger(), "Returned to home position (%.1f deg)", home_angle_);
     } else {
       RCLCPP_ERROR(this->get_logger(), "Failed to return to home position");
       triggerAutoRecovery();
     }
-  } else {
-    RCLCPP_ERROR(this->get_logger(), "Failed to move to fire position");
+  } catch (const std::exception& error) {
+    RCLCPP_ERROR(this->get_logger(), "Shot home timer failed: %s", error.what());
+    triggerAutoRecovery();
+  } catch (...) {
+    RCLCPP_ERROR(this->get_logger(), "Shot home timer failed with unknown exception");
     triggerAutoRecovery();
   }
-
-  is_shooting_ = false;
   RCLCPP_INFO(this->get_logger(), "Shot sequence completed");
+}
+
+void ShotComponent::cancelShotSequence() noexcept {
+  const bool was_shooting = is_shooting_;
+  is_shooting_ = false;
+  try {
+    if (fire_timer_) {
+      fire_timer_->cancel();
+      fire_timer_.reset();
+    }
+    if (!was_shooting) {
+      return;
+    }
+    const int home_position = angleToServoPosition(home_angle_);
+    if (servo_controller_ && servo_controller_->isConnected() &&
+        servo_controller_->setPosition(trigger_servo_id_, home_position, false)) {
+      RCLCPP_INFO(this->get_logger(), "Shot sequence cancelled, returned to home position");
+    } else {
+      RCLCPP_WARN(this->get_logger(),
+                  "Shot sequence cancelled; home return skipped or failed (teardown continues)");
+    }
+  } catch (const std::exception& error) {
+    RCLCPP_WARN(this->get_logger(), "Shot sequence cancellation failed: %s", error.what());
+  } catch (...) {
+    RCLCPP_WARN(this->get_logger(), "Shot sequence cancellation failed with unknown exception");
+  }
 }
 
 // 角度制限関数

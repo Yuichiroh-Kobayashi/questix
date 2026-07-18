@@ -117,6 +117,8 @@ inline double normalizeControllableTimeout(double value, double fallback) {
   return std::isfinite(value) ? value : fallback;
 }
 
+inline bool isValidFireDurationMs(int64_t value) { return value >= 0; }
+
 }  // namespace motor_control_app::shot_auto_start
 
 #endif  // MOTOR_CONTROL_APP__SHOT_AUTO_START_HPP_
