@@ -50,6 +50,8 @@ public:
 private:
   void joyCallback(const sensor_msgs::msg::Joy::SharedPtr msg);
   void executeShotSequence();
+  void fireTimerCallback();
+  void cancelShotSequence();
   void autoStartTimerCallback();
   void controllableCallback(const std_msgs::msg::Bool::SharedPtr msg);
   void controllableTimeoutCallback();
@@ -111,14 +113,17 @@ private:
 
   rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_subscription_;
   // All callbacks intentionally use the node's default MutuallyExclusive callback group:
-  // auto-start, controllable input/timeout, joy input, and the future fire timer added by PR #117.
-  // If these entities are split across callback groups, synchronize lifecycle/controllable state,
-  // timer pointers, runtime_fault_, teardown_pending_, is_shooting_, servo_controller_, and servo
+  // auto-start, controllable input/timeout, joy input, and the fire timer (issue #83). If these
+  // entities are split across callback groups, synchronize lifecycle/controllable state, timer
+  // pointers, runtime_fault_, teardown_pending_, is_shooting_, servo_controller_, and servo
   // serial I/O.
   // lifecycle 状態に依存せず常時生かす（unconfigured でも非常停止解除を検知するため）
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr controllable_sub_;
   rclcpp::TimerBase::SharedPtr auto_start_timer_;
   rclcpp::TimerBase::SharedPtr controllable_timeout_timer_;
+  // 射撃シーケンス用ワンショットタイマー。fire 位置到達後 fire_duration_ms で
+  // 発火し home 復帰する。executor をブロックしないための置き換え（issue #83）。
+  rclcpp::TimerBase::SharedPtr fire_timer_;
 };
 
 }  // namespace motor_control_app
